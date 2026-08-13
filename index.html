@@ -1,0 +1,3579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <title>Capital Echo</title>
+
+  <meta
+    name="description"
+    content="Congressional trading intelligence adjusted for disclosure lag."
+  />
+
+  <!-- Supabase -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- TradingView Lightweight Charts -->
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+
+  <style>
+    :root {
+      --bg: #07090c;
+      --sidebar: #090c10;
+      --panel: #0c1015;
+      --panel2: #10151b;
+
+      --border: rgba(255,255,255,0.075);
+      --border2: rgba(255,255,255,0.12);
+
+      --text: #f5f7f8;
+      --muted: #7d8692;
+      --muted2: #4f5864;
+
+      --green: #9dff57;
+      --green-soft: rgba(157,255,87,.10);
+
+      --red: #ff6170;
+      --red-soft: rgba(255,97,112,.10);
+
+      --orange: #ffb347;
+      --orange-soft: rgba(255,179,71,.10);
+
+      --blue: #68a7ff;
+      --purple: #bf82ff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      background: var(--bg);
+    }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(
+          circle at 70% -20%,
+          rgba(157,255,87,.04),
+          transparent 30%
+        ),
+        var(--bg);
+
+      color: var(--text);
+
+      font-family:
+        Inter,
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+      font-size: 14px;
+
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: flex;
+    }
+
+    /* SIDEBAR */
+
+    .sidebar {
+      width: 225px;
+      min-width: 225px;
+      height: 100vh;
+
+      position: fixed;
+      left: 0;
+      top: 0;
+
+      padding: 22px 14px;
+
+      background:
+        linear-gradient(
+          180deg,
+          rgba(255,255,255,.012),
+          transparent
+        ),
+        var(--sidebar);
+
+      border-right: 1px solid var(--border);
+
+      display: flex;
+      flex-direction: column;
+
+      z-index: 50;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+
+      padding: 0 7px 26px;
+    }
+
+    .brand-icon {
+      width: 36px;
+      height: 36px;
+
+      display: grid;
+      place-items: center;
+
+      background: var(--green);
+      color: #081006;
+
+      border-radius: 8px;
+
+      font-size: 19px;
+      font-weight: 900;
+
+      box-shadow:
+        0 0 32px rgba(157,255,87,.10);
+    }
+
+    .brand-name {
+      font-size: 15px;
+      font-weight: 850;
+      letter-spacing: .2px;
+    }
+
+    .brand-name span {
+      color: var(--green);
+    }
+
+    .brand-sub {
+      margin-top: 2px;
+
+      color: #606975;
+
+      font-size: 7px;
+      letter-spacing: 2px;
+      font-weight: 850;
+    }
+
+    .section-label {
+      margin: 8px 10px;
+
+      color: #464e59;
+
+      font-size: 8px;
+      font-weight: 900;
+      letter-spacing: 1.5px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 4px;
+    }
+
+    .nav button {
+      height: 39px;
+      padding: 0 11px;
+
+      border: 1px solid transparent;
+      border-radius: 6px;
+
+      background: transparent;
+
+      color: #747d89;
+
+      display: flex;
+      align-items: center;
+      gap: 10px;
+
+      text-align: left;
+
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    .nav button:hover {
+      background: rgba(255,255,255,.025);
+      color: #d9dde1;
+    }
+
+    .nav button.active {
+      color: var(--green);
+
+      border-color: rgba(157,255,87,.12);
+
+      background:
+        linear-gradient(
+          90deg,
+          rgba(157,255,87,.09),
+          rgba(157,255,87,.02)
+        );
+    }
+
+    .system-box {
+      margin-top: 27px;
+
+      border: 1px solid var(--border);
+      border-radius: 7px;
+
+      overflow: hidden;
+
+      background: rgba(255,255,255,.01);
+    }
+
+    .system-row {
+      height: 40px;
+
+      padding: 0 11px;
+
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+
+      border-bottom: 1px solid rgba(255,255,255,.04);
+
+      color: #626c77;
+
+      font-size: 9px;
+    }
+
+    .system-row:last-child {
+      border-bottom: 0;
+    }
+
+    .system-row strong {
+      color: #9aa2ac;
+      font-size: 9px;
+    }
+
+    .live {
+      color: var(--green) !important;
+
+      font-size: 8px !important;
+      font-weight: 900;
+    }
+
+    .live::before {
+      content: "";
+
+      display: inline-block;
+
+      width: 5px;
+      height: 5px;
+
+      margin-right: 5px;
+
+      border-radius: 50%;
+
+      background: var(--green);
+
+      box-shadow: 0 0 9px var(--green);
+    }
+
+    .engine-status {
+      margin-top: auto;
+
+      display: flex;
+      gap: 9px;
+      align-items: center;
+
+      padding: 10px 7px;
+    }
+
+    .engine-dot {
+      width: 7px;
+      height: 7px;
+
+      border-radius: 50%;
+      background: var(--green);
+
+      box-shadow: 0 0 12px var(--green);
+    }
+
+    .engine-status strong {
+      display: block;
+
+      font-size: 9px;
+      color: #89929d;
+    }
+
+    .engine-status small {
+      display: block;
+
+      margin-top: 2px;
+
+      font-size: 8px;
+      color: #4c555f;
+    }
+
+    /* WORKSPACE */
+
+    .workspace {
+      width: calc(100% - 225px);
+      margin-left: 225px;
+
+      min-width: 0;
+    }
+
+    .topbar {
+      min-height: 74px;
+
+      position: sticky;
+      top: 0;
+
+      z-index: 40;
+
+      padding: 14px 22px;
+
+      border-bottom: 1px solid var(--border);
+
+      background: rgba(7,9,12,.88);
+      backdrop-filter: blur(20px);
+
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .topbar h1 {
+      margin: 0;
+
+      font-size: 17px;
+      letter-spacing: -.35px;
+    }
+
+    .topbar p {
+      margin: 4px 0 0;
+
+      color: #606975;
+      font-size: 9px;
+    }
+
+    .top-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .status-pill {
+      height: 31px;
+
+      padding: 0 10px;
+
+      border: 1px solid var(--border);
+      border-radius: 5px;
+
+      display: flex;
+      gap: 6px;
+      align-items: center;
+
+      color: #6f7883;
+
+      font-size: 8px;
+      font-weight: 850;
+      letter-spacing: .6px;
+
+      background: rgba(255,255,255,.015);
+    }
+
+    .status-pill i {
+      width: 6px;
+      height: 6px;
+
+      border-radius: 50%;
+
+      background: var(--green);
+
+      box-shadow: 0 0 8px var(--green);
+    }
+
+    .avatar {
+      width: 31px;
+      height: 31px;
+
+      border: 0;
+      border-radius: 6px;
+
+      background: var(--green);
+      color: #071007;
+
+      font-size: 9px;
+      font-weight: 900;
+    }
+
+    /* METRICS */
+
+    .metrics {
+      padding: 18px 20px 0;
+
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+    }
+
+    .metric {
+      min-height: 110px;
+
+      padding: 14px;
+
+      border: 1px solid var(--border);
+      border-radius: 7px;
+
+      background:
+        linear-gradient(
+          145deg,
+          rgba(255,255,255,.02),
+          rgba(255,255,255,.006)
+        );
+
+      position: relative;
+      overflow: hidden;
+    }
+
+    .metric label {
+      color: #59626e;
+
+      font-size: 7px;
+      font-weight: 900;
+      letter-spacing: 1px;
+    }
+
+    .metric strong {
+      display: block;
+
+      margin-top: 14px;
+
+      font-size: 25px;
+      line-height: 1;
+
+      letter-spacing: -1px;
+    }
+
+    .metric small {
+      display: block;
+
+      margin-top: 10px;
+
+      color: #535c67;
+
+      font-size: 8px;
+    }
+
+    .positive {
+      color: var(--green) !important;
+    }
+
+    .negative {
+      color: var(--red) !important;
+    }
+
+    .warning {
+      color: var(--orange) !important;
+    }
+
+    /* GRID */
+
+    .terminal-grid {
+      padding: 8px 20px 0;
+
+      display: grid;
+      grid-template-columns: minmax(0,1fr) 300px;
+      gap: 8px;
+    }
+
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: 7px;
+
+      background:
+        linear-gradient(
+          180deg,
+          rgba(255,255,255,.012),
+          transparent
+        ),
+        var(--panel);
+
+      overflow: hidden;
+    }
+
+    .chart-head {
+      min-height: 78px;
+
+      padding: 0 16px;
+
+      border-bottom: 1px solid var(--border);
+
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .ticker-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+
+      min-width: 0;
+    }
+
+    .ticker-logo {
+      width: 38px;
+      height: 38px;
+
+      flex: 0 0 auto;
+
+      display: grid;
+      place-items: center;
+
+      border-radius: 8px;
+
+      border: 1px solid rgba(157,255,87,.13);
+
+      background: rgba(157,255,87,.05);
+
+      color: var(--green);
+
+      font-size: 15px;
+      font-weight: 900;
+    }
+
+    .ticker-name {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+    }
+
+    .ticker-name h2 {
+      margin: 0;
+
+      font-size: 16px;
+    }
+
+    .ticker-name span {
+      padding: 3px 6px;
+
+      border-radius: 4px;
+
+      background: rgba(255,255,255,.04);
+
+      color: #68717d;
+
+      font-size: 7px;
+      font-weight: 900;
+    }
+
+    .asset-name {
+      max-width: 420px;
+
+      margin-top: 3px;
+
+      color: #5e6773;
+
+      font-size: 8px;
+
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .price-box {
+      text-align: right;
+    }
+
+    .price-box strong {
+      display: block;
+
+      font-size: 20px;
+    }
+
+    .price-box span {
+      display: block;
+
+      margin-top: 3px;
+
+      font-size: 9px;
+      font-weight: 800;
+    }
+
+    .chart-toolbar {
+      height: 39px;
+
+      padding: 0 13px;
+
+      border-bottom: 1px solid rgba(255,255,255,.045);
+
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .chart-tabs {
+      display: flex;
+      gap: 3px;
+    }
+
+    .chart-tabs span {
+      padding: 4px 7px;
+
+      color: #505965;
+
+      font-size: 7px;
+      font-weight: 850;
+    }
+
+    .chart-tabs .active {
+      border-radius: 3px;
+
+      background: rgba(157,255,87,.08);
+
+      color: var(--green);
+    }
+
+    .chart-branding {
+      color: #3e4650;
+
+      font-size: 7px;
+      font-weight: 850;
+      letter-spacing: .8px;
+    }
+
+    #chart {
+      height: 350px;
+      width: 100%;
+
+      background: #090b0f;
+    }
+
+    .chart-events {
+      min-height: 67px;
+
+      border-top: 1px solid var(--border);
+
+      display: grid;
+      grid-template-columns: repeat(3,1fr);
+    }
+
+    .event-box {
+      padding: 11px 14px;
+
+      border-right: 1px solid rgba(255,255,255,.05);
+    }
+
+    .event-box:last-child {
+      border-right: 0;
+    }
+
+    .event-box label {
+      display: block;
+
+      color: #4c5560;
+
+      font-size: 7px;
+      font-weight: 900;
+      letter-spacing: .7px;
+    }
+
+    .event-box strong {
+      display: block;
+
+      margin-top: 5px;
+
+      color: #9aa2ac;
+
+      font-size: 9px;
+    }
+
+    .event-box span {
+      display: block;
+
+      margin-top: 3px;
+
+      font-size: 10px;
+      font-weight: 750;
+    }
+
+    /* INTEL */
+
+    .panel-title {
+      height: 45px;
+
+      padding: 0 13px;
+
+      border-bottom: 1px solid var(--border);
+
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+
+      color: #858e99;
+
+      font-size: 8px;
+      font-weight: 900;
+      letter-spacing: .8px;
+    }
+
+    .profile {
+      margin: 14px;
+
+      padding-bottom: 14px;
+
+      border-bottom: 1px solid rgba(255,255,255,.05);
+
+      display: flex;
+      gap: 10px;
+    }
+
+    .profile-avatar {
+      width: 38px;
+      height: 38px;
+
+      flex: 0 0 auto;
+
+      border: 1px solid var(--border2);
+      border-radius: 50%;
+
+      display: grid;
+      place-items: center;
+
+      background: #11161c;
+
+      color: #bac1c8;
+
+      font-size: 9px;
+      font-weight: 850;
+    }
+
+    .profile label {
+      display: block;
+
+      color: #4d5661;
+
+      font-size: 7px;
+      font-weight: 900;
+    }
+
+    .profile strong {
+      display: block;
+
+      margin-top: 3px;
+
+      font-size: 10px;
+    }
+
+    .profile small {
+      display: block;
+
+      margin-top: 2px;
+
+      color: #5d6671;
+
+      font-size: 8px;
+    }
+
+    .signal-block {
+      padding: 0 14px 14px;
+    }
+
+    .signal {
+      display: inline-block;
+
+      padding: 4px 7px;
+
+      border-radius: 4px;
+
+      font-size: 7px;
+      font-weight: 900;
+      letter-spacing: .6px;
+
+      text-transform: uppercase;
+    }
+
+    .fresh {
+      color: var(--green);
+      background: var(--green-soft);
+    }
+
+    .priced {
+      color: var(--orange);
+      background: var(--orange-soft);
+    }
+
+    .late {
+      color: #aab2bc;
+      background: rgba(170,178,188,.09);
+    }
+
+    .moderate {
+      color: var(--blue);
+      background: rgba(104,167,255,.09);
+    }
+
+    .fell {
+      color: var(--purple);
+      background: rgba(191,130,255,.09);
+    }
+
+    .signal-block h3 {
+      margin: 12px 0 5px;
+
+      font-size: 14px;
+    }
+
+    .signal-block p {
+      margin: 0;
+
+      color: #626b76;
+
+      font-size: 9px;
+      line-height: 1.55;
+    }
+
+    .intel-grid {
+      margin: 0 14px;
+
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+
+      border: 1px solid var(--border);
+      border-radius: 6px;
+
+      overflow: hidden;
+    }
+
+    .intel-item {
+      min-height: 60px;
+
+      padding: 10px;
+
+      border-right: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .intel-item:nth-child(2n) {
+      border-right: 0;
+    }
+
+    .intel-item:nth-last-child(-n+2) {
+      border-bottom: 0;
+    }
+
+    .intel-item label {
+      display: block;
+
+      color: #4f5863;
+
+      font-size: 7px;
+      font-weight: 850;
+    }
+
+    .intel-item strong {
+      display: block;
+
+      margin-top: 7px;
+
+      font-size: 12px;
+    }
+
+    .filing-link {
+      height: 34px;
+
+      margin: 14px;
+
+      padding: 0 11px;
+
+      border: 1px solid var(--border);
+      border-radius: 5px;
+
+      display: flex;
+      align-items: center;
+      justify-content: center;
+
+      background: rgba(255,255,255,.012);
+
+      color: #717a85;
+
+      text-decoration: none;
+
+      font-size: 8px;
+      font-weight: 850;
+      letter-spacing: .6px;
+    }
+
+    .filing-link:hover {
+      border-color: rgba(157,255,87,.2);
+
+      color: var(--green);
+
+      background: rgba(157,255,87,.03);
+    }
+
+    /* ACTIVITY */
+
+    .activity {
+      margin: 8px 20px 24px;
+    }
+
+    .activity-head {
+      min-height: 70px;
+
+      padding: 13px 15px;
+
+      border-bottom: 1px solid var(--border);
+
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .activity-head h2 {
+      margin: 0;
+
+      font-size: 13px;
+    }
+
+    .activity-head p {
+      margin: 4px 0 0;
+
+      color: #555e69;
+
+      font-size: 8px;
+    }
+
+    .filters {
+      display: flex;
+      gap: 6px;
+    }
+
+    .search {
+      width: 235px;
+      height: 31px;
+
+      padding: 0 9px;
+
+      border: 1px solid var(--border);
+      border-radius: 5px;
+
+      background: #090c10;
+
+      color: #c4cbd2;
+
+      outline: 0;
+
+      font-size: 9px;
+    }
+
+    select {
+      height: 31px;
+
+      padding: 0 9px;
+
+      border: 1px solid var(--border);
+      border-radius: 5px;
+
+      background: #090c10;
+      color: #727b86;
+
+      outline: 0;
+
+      font-size: 9px;
+    }
+
+    .table-wrap {
+      width: 100%;
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+
+      border-collapse: collapse;
+
+      white-space: nowrap;
+
+      font-size: 9px;
+    }
+
+    th {
+      height: 35px;
+
+      padding: 0 11px;
+
+      text-align: left;
+
+      background: #090c10;
+
+      border-bottom: 1px solid var(--border);
+
+      color: #4b545f;
+
+      font-size: 7px;
+      font-weight: 900;
+      letter-spacing: .65px;
+    }
+
+    td {
+      height: 52px;
+
+      padding: 0 11px;
+
+      border-bottom: 1px solid rgba(255,255,255,.04);
+
+      color: #828b96;
+    }
+
+    tbody tr {
+      cursor: pointer;
+    }
+
+    tbody tr:hover td {
+      background: rgba(255,255,255,.018);
+    }
+
+    tbody tr.selected td {
+      background: rgba(157,255,87,.025);
+    }
+
+    .person {
+      color: #bbc2c9;
+      font-weight: 650;
+    }
+
+    .ticker {
+      color: #e0e3e6;
+      font-weight: 800;
+    }
+
+    .action {
+      padding: 4px 6px;
+
+      border-radius: 3px;
+
+      font-size: 7px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .purchase {
+      color: var(--green);
+      background: var(--green-soft);
+    }
+
+    .sale {
+      color: var(--red);
+      background: var(--red-soft);
+    }
+
+    /* LEADERBOARD */
+
+    .view {
+      display: none;
+    }
+
+    .view.active {
+      display: block;
+    }
+
+    .leaderboard {
+      margin: 18px 20px 24px;
+    }
+
+    .leader-head {
+      min-height: 78px;
+
+      padding: 15px;
+
+      border-bottom: 1px solid var(--border);
+    }
+
+    .leader-head h2 {
+      margin: 0;
+
+      font-size: 14px;
+    }
+
+    .leader-head p {
+      margin: 4px 0 0;
+
+      color: #59626d;
+
+      font-size: 8px;
+    }
+
+    .leader-row {
+      min-height: 65px;
+
+      padding: 8px 14px;
+
+      border-bottom: 1px solid rgba(255,255,255,.045);
+
+      display: grid;
+      grid-template-columns:
+        45px
+        minmax(200px,1fr)
+        110px
+        100px
+        90px
+        85px;
+
+      align-items: center;
+    }
+
+    .rank {
+      color: #4f5863;
+      font-size: 10px;
+      font-weight: 850;
+    }
+
+    .leader-person strong {
+      display: block;
+
+      font-size: 10px;
+    }
+
+    .leader-person small {
+      display: block;
+
+      margin-top: 3px;
+
+      color: #59626d;
+
+      font-size: 8px;
+    }
+
+    .leader-stat label {
+      display: block;
+
+      color: #4f5863;
+
+      font-size: 7px;
+      font-weight: 900;
+    }
+
+    .leader-stat strong {
+      display: block;
+
+      margin-top: 5px;
+
+      font-size: 11px;
+    }
+
+    .echo-score {
+      width: 56px;
+      height: 38px;
+
+      justify-self: end;
+
+      border: 1px solid rgba(157,255,87,.12);
+      border-radius: 5px;
+
+      display: grid;
+      place-items: center;
+
+      background: rgba(157,255,87,.035);
+
+      color: var(--green);
+
+      font-weight: 900;
+    }
+
+    /* SIGNAL VIEW */
+
+    .signals-grid {
+      padding: 18px 20px;
+
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .signal-list .panel-title {
+      margin-bottom: 0;
+    }
+
+    .signal-row {
+      width: 100%;
+
+      min-height: 57px;
+
+      padding: 9px 13px;
+
+      border: 0;
+      border-bottom: 1px solid rgba(255,255,255,.045);
+
+      background: transparent;
+
+      color: inherit;
+
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+
+      text-align: left;
+    }
+
+    .signal-row:hover {
+      background: rgba(255,255,255,.018);
+    }
+
+    .signal-row strong {
+      display: block;
+      font-size: 10px;
+    }
+
+    .signal-row span {
+      display: block;
+
+      margin-top: 3px;
+
+      color: #5b6470;
+
+      font-size: 8px;
+    }
+
+    .signal-row b {
+      display: block;
+
+      text-align: right;
+
+      font-size: 9px;
+    }
+
+    .signal-row small {
+      display: block;
+
+      margin-top: 3px;
+
+      text-align: right;
+
+      color: #5a6370;
+
+      font-size: 8px;
+    }
+
+    /* LOADING */
+
+    #loading {
+      position: fixed;
+      inset: 0;
+
+      z-index: 200;
+
+      background: #07090c;
+
+      display: flex;
+      align-items: center;
+      justify-content: center;
+
+      color: #767f89;
+      font-size: 11px;
+    }
+
+    .loader {
+      width: 18px;
+      height: 18px;
+
+      margin-right: 10px;
+
+      border: 2px solid #20262c;
+      border-top-color: var(--green);
+
+      border-radius: 50%;
+
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .error {
+      display: none;
+
+      margin: 18px 20px;
+
+      padding: 14px;
+
+      border: 1px solid rgba(255,97,112,.18);
+      border-radius: 6px;
+
+      background: rgba(255,97,112,.04);
+
+      color: var(--red);
+
+      font-size: 10px;
+    }
+
+    footer {
+      padding: 0 20px 25px;
+
+      color: #444c57;
+
+      font-size: 8px;
+      line-height: 1.5;
+    }
+
+    footer a {
+      color: #69727d;
+    }
+
+    @media (max-width: 1150px) {
+      .metrics {
+        grid-template-columns: repeat(3,1fr);
+      }
+
+      .terminal-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 800px) {
+      .sidebar {
+        width: 64px;
+        min-width: 64px;
+      }
+
+      .workspace {
+        width: calc(100% - 64px);
+        margin-left: 64px;
+      }
+
+      .brand {
+        justify-content: center;
+      }
+
+      .brand-text,
+      .section-label,
+      .nav button span,
+      .system-box,
+      .engine-status {
+        display: none;
+      }
+
+      .nav button {
+        justify-content: center;
+      }
+
+      .metrics {
+        grid-template-columns: repeat(2,1fr);
+      }
+
+      .signals-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 600px) {
+      .topbar {
+        padding: 12px;
+      }
+
+      .topbar p,
+      .status-pill {
+        display: none;
+      }
+
+      .metrics,
+      .terminal-grid,
+      .signals-grid {
+        padding-left: 10px;
+        padding-right: 10px;
+      }
+
+      .activity,
+      .leaderboard {
+        margin-left: 10px;
+        margin-right: 10px;
+      }
+
+      .metrics {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .activity-head {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+      }
+
+      .filters {
+        width: 100%;
+      }
+
+      .search {
+        width: 100%;
+      }
+
+      .leader-row {
+        grid-template-columns: 35px 1fr 70px;
+      }
+
+      .leader-stat:nth-of-type(2),
+      .leader-stat:nth-of-type(3),
+      .leader-stat:nth-of-type(4) {
+        display: none;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+<div id="loading">
+  <div class="loader"></div>
+  Loading Capital Echo intelligence...
+</div>
+
+<div class="app">
+
+  <aside class="sidebar">
+
+    <div class="brand">
+      <div class="brand-icon">↗</div>
+
+      <div class="brand-text">
+        <div class="brand-name">
+          CAPITAL<span>ECHO</span>
+        </div>
+
+        <div class="brand-sub">
+          MARKET INTELLIGENCE
+        </div>
+      </div>
+    </div>
+
+    <div class="section-label">COMMAND</div>
+
+    <div class="nav">
+      <button id="navTerminal" class="active">
+        ◫ <span>Terminal</span>
+      </button>
+
+      <button id="navLeaderboard">
+        ◎ <span>Leaderboard</span>
+      </button>
+
+      <button id="navSignals">
+        ◉ <span>Signals</span>
+      </button>
+    </div>
+
+    <div class="system-box">
+      <div class="system-row">
+        <span>Supabase</span>
+        <strong class="live">LIVE</strong>
+      </div>
+
+      <div class="system-row">
+        <span>House PTR</span>
+        <strong id="sideTradeCount">0</strong>
+      </div>
+
+      <div class="system-row">
+        <span>Engine</span>
+        <strong>30M</strong>
+      </div>
+    </div>
+
+    <div class="engine-status">
+      <div class="engine-dot"></div>
+
+      <div>
+        <strong>Data engine online</strong>
+        <small>Capital Echo v1.0</small>
+      </div>
+    </div>
+
+  </aside>
+
+
+  <main class="workspace">
+
+    <header class="topbar">
+
+      <div>
+        <h1 id="pageTitle">
+          Intelligence Terminal
+        </h1>
+
+        <p>
+          Congressional disclosure intelligence adjusted for public filing lag.
+        </p>
+      </div>
+
+      <div class="top-actions">
+        <div class="status-pill">
+          <i></i>
+          DATA LIVE
+        </div>
+
+        <button class="avatar">CE</button>
+      </div>
+
+    </header>
+
+
+    <div class="error" id="errorBox"></div>
+
+
+    <!-- TERMINAL -->
+
+    <section id="terminalView" class="view active">
+
+      <div class="metrics">
+
+        <div class="metric">
+          <label>TRACKED DISCLOSURES</label>
+          <strong id="metricTrades">0</strong>
+          <small>Congressional transactions indexed</small>
+        </div>
+
+        <div class="metric">
+          <label>FRESH SIGNALS</label>
+          <strong id="metricFresh">0</strong>
+          <small>Filing lag under 14 days</small>
+        </div>
+
+        <div class="metric">
+          <label>AVG FOLLOWER ROI</label>
+          <strong id="metricROI">—</strong>
+          <small>Purchase performance after disclosure</small>
+        </div>
+
+        <div class="metric">
+          <label>AVG DISCLOSURE LAG</label>
+          <strong id="metricLag">—</strong>
+          <small>Trade → disclosure</small>
+        </div>
+
+        <div class="metric">
+          <label>PRICED IN</label>
+          <strong id="metricPriced">0</strong>
+          <small>Moved ≥20% before public filing</small>
+        </div>
+
+      </div>
+
+
+      <div class="terminal-grid">
+
+        <section class="panel">
+
+          <div class="chart-head">
+
+            <div class="ticker-wrap">
+
+              <div class="ticker-logo" id="tickerLogo">
+                C
+              </div>
+
+              <div>
+                <div class="ticker-name">
+                  <h2 id="selectedTicker">—</h2>
+                  <span id="selectedType">—</span>
+                </div>
+
+                <div class="asset-name" id="selectedAsset">
+                  Select a trade
+                </div>
+              </div>
+
+            </div>
+
+            <div class="price-box">
+              <strong id="selectedPrice">—</strong>
+              <span id="selectedROI">—</span>
+            </div>
+
+          </div>
+
+
+          <div class="chart-toolbar">
+
+            <div class="chart-tabs">
+              <span>TRADE</span>
+              <span>FILED</span>
+              <span class="active">NOW</span>
+            </div>
+
+            <div class="chart-branding">
+              TRADINGVIEW LIGHTWEIGHT CHARTS
+            </div>
+
+          </div>
+
+
+          <div id="chart"></div>
+
+
+          <div class="chart-events">
+
+            <div class="event-box">
+              <label>TRANSACTION</label>
+              <strong id="eventTradeDate">—</strong>
+              <span id="eventTradePrice">—</span>
+            </div>
+
+            <div class="event-box">
+              <label>DISCLOSURE</label>
+              <strong id="eventDisclosureDate">—</strong>
+              <span id="eventDisclosurePrice">—</span>
+            </div>
+
+            <div class="event-box">
+              <label>CURRENT</label>
+              <strong>Latest quote</strong>
+              <span id="eventCurrentPrice">—</span>
+            </div>
+
+          </div>
+
+        </section>
+
+
+        <aside class="panel">
+
+          <div class="panel-title">
+            ECHO INTELLIGENCE
+            <span>◈</span>
+          </div>
+
+          <div class="profile">
+
+            <div class="profile-avatar" id="profileInitials">
+              CE
+            </div>
+
+            <div>
+              <label>DISCLOSED BY</label>
+              <strong id="profileName">—</strong>
+              <small id="profileParty">U.S. HOUSE</small>
+            </div>
+
+          </div>
+
+
+          <div class="signal-block">
+
+            <span class="signal moderate" id="signalBadge">
+              UNKNOWN
+            </span>
+
+            <h3 id="signalTitle">Select trade</h3>
+
+            <p id="signalDescription">
+              Choose a congressional transaction to inspect its disclosure lag.
+            </p>
+
+          </div>
+
+
+          <div class="intel-grid">
+
+            <div class="intel-item">
+              <label>FILING LAG</label>
+              <strong id="intelLag">—</strong>
+            </div>
+
+            <div class="intel-item">
+              <label>MISSED MOVE</label>
+              <strong id="intelMissed">—</strong>
+            </div>
+
+            <div class="intel-item">
+              <label>FOLLOWER ROI</label>
+              <strong id="intelROI">—</strong>
+            </div>
+
+            <div class="intel-item">
+              <label>REPORTED SIZE</label>
+              <strong id="intelAmount">—</strong>
+            </div>
+
+          </div>
+
+
+          <a
+            id="filingLink"
+            class="filing-link"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            OPEN OFFICIAL FILING ↗
+          </a>
+
+        </aside>
+
+      </div>
+
+
+      <section class="panel activity">
+
+        <div class="activity-head">
+
+          <div>
+            <h2>Congressional Activity</h2>
+
+            <p>
+              Latest transactions discovered by the Capital Echo data engine.
+            </p>
+          </div>
+
+          <div class="filters">
+
+            <input
+              id="searchInput"
+              class="search"
+              placeholder="Search ticker or politician..."
+            />
+
+            <select id="typeFilter">
+              <option value="All">All</option>
+              <option value="Purchase">Purchase</option>
+              <option value="Sale">Sale</option>
+              <option value="Exchange">Exchange</option>
+            </select>
+
+          </div>
+
+        </div>
+
+
+        <div class="table-wrap">
+
+          <table>
+
+            <thead>
+              <tr>
+                <th>POLITICIAN</th>
+                <th>ASSET</th>
+                <th>ACTION</th>
+                <th>TRADE DATE</th>
+                <th>DISCLOSED</th>
+                <th>LAG</th>
+                <th>MISSED MOVE</th>
+                <th>FOLLOWER ROI</th>
+                <th>SIGNAL</th>
+              </tr>
+            </thead>
+
+            <tbody id="tradeRows"></tbody>
+
+          </table>
+
+        </div>
+
+      </section>
+
+    </section>
+
+
+    <!-- LEADERBOARD -->
+
+    <section id="leaderboardView" class="view">
+
+      <section class="panel leaderboard">
+
+        <div class="leader-head">
+          <h2>Capital Echo Leaderboard</h2>
+
+          <p>
+            Ranked using public-actionable purchase performance rather than politician trade-date performance.
+          </p>
+        </div>
+
+        <div id="leaderRows"></div>
+
+      </section>
+
+    </section>
+
+
+    <!-- SIGNALS -->
+
+    <section id="signalsView" class="view">
+
+      <div class="signals-grid">
+
+        <section class="panel signal-list">
+
+          <div class="panel-title">
+            FRESH SIGNALS
+            <span>●</span>
+          </div>
+
+          <div id="freshSignalRows"></div>
+
+        </section>
+
+
+        <section class="panel signal-list">
+
+          <div class="panel-title">
+            PRICED-IN WARNINGS
+            <span>▲</span>
+          </div>
+
+          <div id="pricedSignalRows"></div>
+
+        </section>
+
+      </div>
+
+    </section>
+
+
+    <footer>
+      Capital Echo analyzes public congressional financial disclosures.
+      Market prices are benchmark estimates and should not be interpreted as
+      exact execution prices. Not investment advice.
+      Charts powered by
+      <a href="https://www.tradingview.com/" target="_blank">
+        TradingView Lightweight Charts
+      </a>.
+    </footer>
+
+  </main>
+
+</div>
+
+
+<script>
+/* ============================================================
+   CAPITAL ECHO CONFIG
+   ============================================================
+
+   PUT YOUR SUPABASE VALUES BELOW.
+
+   IMPORTANT:
+   USE YOUR PUBLIC / ANON / PUBLISHABLE KEY.
+   NEVER PUT THE SERVICE_ROLE KEY IN THIS HTML FILE.
+*/
+
+const SUPABASE_URL = "https://ittuedremlhasujyolkm.supabase.co";
+
+const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml0dHVlZHJlbWxoYXN1anlvbGttIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY2NDI3NDIsImV4cCI6MjEwMjIxODc0Mn0.H5yja9E-ZKDQhFVcCk8KalE8HSiUXTdUQPLIqqUB2e4";
+
+
+/* ============================================================
+   SUPABASE
+   ============================================================ */
+
+const db = window.supabase.createClient(
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY
+);
+
+
+/* ============================================================
+   STATE
+   ============================================================ */
+
+let trades = [];
+let selectedTrade = null;
+
+let chart = null;
+let priceSeries = null;
+
+
+/* ============================================================
+   HELPERS
+   ============================================================ */
+
+function cleanPolitician(name = "") {
+  return String(name)
+    .replace(/^Hon\.\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+
+function money(value) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === "" ||
+    Number.isNaN(Number(value))
+  ) {
+    return "—";
+  }
+
+  return "$" + Number(value).toLocaleString(
+    "en-US",
+    {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }
+  );
+}
+
+
+function pct(value) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === "" ||
+    Number.isNaN(Number(value))
+  ) {
+    return "—";
+  }
+
+  const number = Number(value);
+
+  return (
+    (number > 0 ? "+" : "") +
+    number.toFixed(2) +
+    "%"
+  );
+}
+
+
+function shortDate(value) {
+  if (!value) return "—";
+
+  const date = new Date(value + "T12:00:00");
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleDateString(
+    "en-US",
+    {
+      month: "short",
+      day: "numeric",
+      year: "numeric"
+    }
+  );
+}
+
+
+function initials(name = "") {
+  return cleanPolitician(name)
+    .split(" ")
+    .filter(Boolean)
+    .map(word => word[0])
+    .slice(0,2)
+    .join("")
+    .toUpperCase();
+}
+
+
+function partyDisplay(party) {
+  if (!party) {
+    return "U.S. HOUSE";
+  }
+
+  return party + " • U.S. HOUSE";
+}
+
+
+function classForNumber(value) {
+  const num = Number(value);
+
+  if (Number.isNaN(num)) return "";
+
+  return num >= 0
+    ? "positive"
+    : "negative";
+}
+
+
+function signalClass(signal = "") {
+  const value = signal.toLowerCase();
+
+  if (value.includes("fresh")) {
+    return "signal fresh";
+  }
+
+  if (value.includes("priced")) {
+    return "signal priced";
+  }
+
+  if (value.includes("fell")) {
+    return "signal fell";
+  }
+
+  if (value.includes("late")) {
+    return "signal late";
+  }
+
+  return "signal moderate";
+}
+
+
+function safe(value) {
+  const div = document.createElement("div");
+
+  div.textContent =
+    value === null ||
+    value === undefined
+      ? ""
+      : String(value);
+
+  return div.innerHTML;
+}
+
+
+/* ============================================================
+   LOAD DATA
+   ============================================================ */
+
+async function loadTrades() {
+
+  try {
+
+    const response = await db
+      .from("trades")
+      .select("*")
+      .order(
+        "disclosure_date",
+        { ascending: false }
+      )
+      .order(
+        "id",
+        { ascending: false }
+      )
+      .limit(500);
+
+
+    if (response.error) {
+      throw response.error;
+    }
+
+
+    trades = response.data || [];
+
+
+    document.getElementById(
+      "sideTradeCount"
+    ).textContent = trades.length;
+
+
+    calculateMetrics();
+
+    renderTrades();
+
+    renderLeaderboard();
+
+    renderSignals();
+
+
+    if (trades.length > 0) {
+      selectTrade(trades[0]);
+    }
+
+
+    document.getElementById(
+      "loading"
+    ).style.display = "none";
+
+
+  } catch (error) {
+
+    console.error(error);
+
+    document.getElementById(
+      "loading"
+    ).style.display = "none";
+
+
+    const box =
+      document.getElementById(
+        "errorBox"
+      );
+
+
+    box.style.display = "block";
+
+    box.innerHTML =
+      "<strong>Capital Echo could not read Supabase.</strong><br><br>" +
+      safe(error.message || error);
+
+  }
+
+}
+
+
+/* ============================================================
+   METRICS
+   ============================================================ */
+
+function calculateMetrics() {
+
+  document.getElementById(
+    "metricTrades"
+  ).textContent = trades.length;
+
+
+  const fresh = trades.filter(
+    trade =>
+      String(
+        trade.signal_status || ""
+      )
+      .toLowerCase()
+      .includes("fresh")
+  );
+
+
+  document.getElementById(
+    "metricFresh"
+  ).textContent = fresh.length;
+
+
+  const purchases = trades.filter(
+    trade =>
+      String(
+        trade.transaction_type || ""
+      )
+      .toLowerCase() === "purchase"
+      &&
+      trade.real_return_pct !== null
+  );
+
+
+  let averageROI = null;
+
+
+  if (purchases.length) {
+
+    averageROI =
+      purchases.reduce(
+        (total, trade) =>
+          total +
+          Number(
+            trade.real_return_pct
+          ),
+        0
+      )
+      /
+      purchases.length;
+
+  }
+
+
+  const roiElement =
+    document.getElementById(
+      "metricROI"
+    );
+
+
+  roiElement.textContent =
+    pct(averageROI);
+
+
+  roiElement.className =
+    classForNumber(
+      averageROI
+    );
+
+
+  const lagTrades =
+    trades.filter(
+      trade =>
+        trade.lag_days !== null
+        &&
+        !Number.isNaN(
+          Number(
+            trade.lag_days
+          )
+        )
+    );
+
+
+  let averageLag = null;
+
+
+  if (lagTrades.length) {
+
+    averageLag =
+      lagTrades.reduce(
+        (total, trade) =>
+          total +
+          Number(
+            trade.lag_days
+          ),
+        0
+      )
+      /
+      lagTrades.length;
+
+  }
+
+
+  document.getElementById(
+    "metricLag"
+  ).textContent =
+    averageLag === null
+      ? "—"
+      : averageLag.toFixed(1) + "D";
+
+
+  const priced =
+    trades.filter(
+      trade =>
+        String(
+          trade.signal_status || ""
+        )
+        .toLowerCase()
+        .includes("priced")
+    );
+
+
+  document.getElementById(
+    "metricPriced"
+  ).textContent =
+    priced.length;
+
+}
+
+
+/* ============================================================
+   TRADE TABLE
+   ============================================================ */
+
+function renderTrades() {
+
+  const search =
+    document.getElementById(
+      "searchInput"
+    )
+    .value
+    .trim()
+    .toLowerCase();
+
+
+  const type =
+    document.getElementById(
+      "typeFilter"
+    )
+    .value;
+
+
+  const filtered =
+    trades.filter(
+      trade => {
+
+        const matchesSearch =
+          !search
+          ||
+          String(
+            trade.ticker || ""
+          )
+          .toLowerCase()
+          .includes(search)
+          ||
+          String(
+            trade.politician || ""
+          )
+          .toLowerCase()
+          .includes(search)
+          ||
+          String(
+            trade.asset_name || ""
+          )
+          .toLowerCase()
+          .includes(search);
+
+
+        const matchesType =
+          type === "All"
+          ||
+          trade.transaction_type === type;
+
+
+        return (
+          matchesSearch
+          &&
+          matchesType
+        );
+
+      }
+    );
+
+
+  const body =
+    document.getElementById(
+      "tradeRows"
+    );
+
+
+  body.innerHTML = "";
+
+
+  filtered
+    .slice(0,150)
+    .forEach(
+      trade => {
+
+        const row =
+          document.createElement(
+            "tr"
+          );
+
+
+        if (
+          selectedTrade
+          &&
+          selectedTrade.id === trade.id
+        ) {
+          row.classList.add(
+            "selected"
+          );
+        }
+
+
+        row.innerHTML = `
+
+          <td class="person">
+            ${safe(
+              cleanPolitician(
+                trade.politician
+              )
+            )}
+          </td>
+
+          <td>
+            <span class="ticker">
+              ${safe(trade.ticker)}
+            </span>
+          </td>
+
+          <td>
+            <span class="action ${
+              String(
+                trade.transaction_type
+              )
+              .toLowerCase() ===
+              "purchase"
+                ? "purchase"
+                : "sale"
+            }">
+              ${safe(
+                trade.transaction_type
+              )}
+            </span>
+          </td>
+
+          <td>
+            ${shortDate(
+              trade.transaction_date
+            )}
+          </td>
+
+          <td>
+            ${shortDate(
+              trade.disclosure_date
+            )}
+          </td>
+
+          <td>
+            ${trade.lag_days ?? "—"}d
+          </td>
+
+          <td class="${
+            Number(
+              trade.missed_move_pct
+            ) >= 20
+              ? "warning"
+              : ""
+          }">
+            ${pct(
+              trade.missed_move_pct
+            )}
+          </td>
+
+          <td class="${
+            classForNumber(
+              trade.real_return_pct
+            )
+          }">
+            ${pct(
+              trade.real_return_pct
+            )}
+          </td>
+
+          <td>
+            <span class="${
+              signalClass(
+                trade.signal_status
+              )
+            }">
+              ${safe(
+                trade.signal_status
+              )}
+            </span>
+          </td>
+
+        `;
+
+
+        row.addEventListener(
+          "click",
+          () => {
+            selectTrade(trade);
+          }
+        );
+
+
+        body.appendChild(row);
+
+      }
+    );
+
+}
+
+
+/* ============================================================
+   SELECT TRADE
+   ============================================================ */
+
+function selectTrade(trade) {
+
+  selectedTrade = trade;
+
+
+  document.getElementById(
+    "selectedTicker"
+  ).textContent =
+    trade.ticker || "—";
+
+
+  document.getElementById(
+    "tickerLogo"
+  ).textContent =
+    trade.ticker
+      ? trade.ticker[0]
+      : "C";
+
+
+  document.getElementById(
+    "selectedType"
+  ).textContent =
+    trade.transaction_type || "—";
+
+
+  document.getElementById(
+    "selectedAsset"
+  ).textContent =
+    trade.asset_name || "—";
+
+
+  document.getElementById(
+    "selectedPrice"
+  ).textContent =
+    money(
+      trade.current_price
+    );
+
+
+  const selectedROI =
+    document.getElementById(
+      "selectedROI"
+    );
+
+
+  selectedROI.textContent =
+    pct(
+      trade.real_return_pct
+    );
+
+
+  selectedROI.className =
+    classForNumber(
+      trade.real_return_pct
+    );
+
+
+  document.getElementById(
+    "eventTradeDate"
+  ).textContent =
+    shortDate(
+      trade.transaction_date
+    );
+
+
+  document.getElementById(
+    "eventTradePrice"
+  ).textContent =
+    money(
+      trade.transaction_price
+    );
+
+
+  document.getElementById(
+    "eventDisclosureDate"
+  ).textContent =
+    shortDate(
+      trade.disclosure_date
+    );
+
+
+  document.getElementById(
+    "eventDisclosurePrice"
+  ).textContent =
+    money(
+      trade.disclosure_price
+    );
+
+
+  document.getElementById(
+    "eventCurrentPrice"
+  ).textContent =
+    money(
+      trade.current_price
+    );
+
+
+  document.getElementById(
+    "profileInitials"
+  ).textContent =
+    initials(
+      trade.politician
+    );
+
+
+  document.getElementById(
+    "profileName"
+  ).textContent =
+    cleanPolitician(
+      trade.politician
+    );
+
+
+  document.getElementById(
+    "profileParty"
+  ).textContent =
+    partyDisplay(
+      trade.party
+    );
+
+
+  const badge =
+    document.getElementById(
+      "signalBadge"
+    );
+
+
+  badge.textContent =
+    trade.signal_status ||
+    "Unknown";
+
+
+  badge.className =
+    signalClass(
+      trade.signal_status
+    );
+
+
+  document.getElementById(
+    "signalTitle"
+  ).textContent =
+    (
+      trade.transaction_type ||
+      "Trade"
+    )
+    +
+    " "
+    +
+    (
+      trade.ticker ||
+      ""
+    );
+
+
+  document.getElementById(
+    "signalDescription"
+  ).innerHTML =
+    "The public learned about this transaction <strong>"
+    +
+    (
+      trade.lag_days ?? "—"
+    )
+    +
+    " days</strong> after the reported transaction date.";
+
+
+  document.getElementById(
+    "intelLag"
+  ).textContent =
+    (
+      trade.lag_days ?? "—"
+    )
+    +
+    "d";
+
+
+  const missed =
+    document.getElementById(
+      "intelMissed"
+    );
+
+
+  missed.textContent =
+    pct(
+      trade.missed_move_pct
+    );
+
+
+  missed.className =
+    Number(
+      trade.missed_move_pct
+    ) >= 20
+      ? "warning"
+      : classForNumber(
+          trade.missed_move_pct
+        );
+
+
+  const roi =
+    document.getElementById(
+      "intelROI"
+    );
+
+
+  roi.textContent =
+    pct(
+      trade.real_return_pct
+    );
+
+
+  roi.className =
+    classForNumber(
+      trade.real_return_pct
+    );
+
+
+  document.getElementById(
+    "intelAmount"
+  ).textContent =
+    trade.amount || "—";
+
+
+  const link =
+    document.getElementById(
+      "filingLink"
+    );
+
+
+  if (trade.filing_url) {
+
+    link.href =
+      trade.filing_url;
+
+    link.style.display =
+      "flex";
+
+  } else {
+
+    link.style.display =
+      "none";
+
+  }
+
+
+  renderChart(trade);
+
+  renderTrades();
+
+}
+
+
+/* ============================================================
+   TRADINGVIEW LIGHTWEIGHT CHART
+   ============================================================ */
+
+function renderChart(trade) {
+
+  const container =
+    document.getElementById(
+      "chart"
+    );
+
+
+  container.innerHTML = "";
+
+
+  if (chart) {
+    chart.remove();
+    chart = null;
+  }
+
+
+  chart =
+    LightweightCharts.createChart(
+      container,
+      {
+
+        width:
+          container.clientWidth,
+
+        height: 350,
+
+        layout: {
+
+          background: {
+            type:
+              LightweightCharts
+                .ColorType
+                .Solid,
+
+            color: "#090b0f"
+          },
+
+          textColor: "#737c87"
+
+        },
+
+        grid: {
+
+          vertLines: {
+            color:
+              "rgba(255,255,255,.035)"
+          },
+
+          horzLines: {
+            color:
+              "rgba(255,255,255,.035)"
+          }
+
+        },
+
+        rightPriceScale: {
+          borderColor:
+            "rgba(255,255,255,.07)"
+        },
+
+        timeScale: {
+          borderColor:
+            "rgba(255,255,255,.07)"
+        }
+
+      }
+    );
+
+
+  priceSeries =
+    chart.addSeries(
+      LightweightCharts.LineSeries,
+      {
+
+        color: "#9dff57",
+
+        lineWidth: 2,
+
+        lastValueVisible: true,
+
+        priceLineVisible: true
+
+      }
+    );
+
+
+  const points = [];
+
+
+  if (
+    trade.transaction_date
+    &&
+    trade.transaction_price !== null
+  ) {
+
+    points.push({
+      time:
+        trade.transaction_date,
+
+      value:
+        Number(
+          trade.transaction_price
+        )
+    });
+
+  }
+
+
+  if (
+    trade.disclosure_date
+    &&
+    trade.disclosure_price !== null
+  ) {
+
+    points.push({
+      time:
+        trade.disclosure_date,
+
+      value:
+        Number(
+          trade.disclosure_price
+        )
+    });
+
+  }
+
+
+  if (
+    trade.current_price !== null
+  ) {
+
+    points.push({
+
+      time:
+        new Date()
+          .toISOString()
+          .slice(0,10),
+
+      value:
+        Number(
+          trade.current_price
+        )
+
+    });
+
+  }
+
+
+  const unique =
+    new Map();
+
+
+  points.forEach(
+    point => {
+
+      unique.set(
+        point.time,
+        point
+      );
+
+    }
+  );
+
+
+  const finalPoints =
+    Array.from(
+      unique.values()
+    )
+    .sort(
+      (a,b) =>
+        String(a.time)
+        .localeCompare(
+          String(b.time)
+        )
+    );
+
+
+  if (
+    finalPoints.length
+  ) {
+
+    priceSeries.setData(
+      finalPoints
+    );
+
+
+    chart
+      .timeScale()
+      .fitContent();
+
+  }
+
+
+  const resize =
+    () => {
+
+      if (!chart) return;
+
+
+      chart.applyOptions({
+
+        width:
+          container.clientWidth
+
+      });
+
+    };
+
+
+  window.onresize =
+    resize;
+
+}
+
+
+/* ============================================================
+   LEADERBOARD
+   ============================================================ */
+
+function buildPoliticianStats() {
+
+  const map =
+    new Map();
+
+
+  trades.forEach(
+    trade => {
+
+      const name =
+        cleanPolitician(
+          trade.politician
+        );
+
+
+      if (!name) {
+        return;
+      }
+
+
+      if (!map.has(name)) {
+
+        map.set(
+          name,
+          {
+
+            politician: name,
+
+            purchases: 0,
+
+            roiCount: 0,
+
+            roiTotal: 0,
+
+            winners: 0,
+
+            lagTotal: 0,
+
+            tradeCount: 0
+
+          }
+        );
+
+      }
+
+
+      const person =
+        map.get(name);
+
+
+      person.tradeCount++;
+
+
+      if (
+        trade.lag_days !== null
+      ) {
+
+        person.lagTotal +=
+          Number(
+            trade.lag_days
+          );
+
+      }
+
+
+      if (
+        String(
+          trade.transaction_type ||
+          ""
+        )
+        .toLowerCase()
+        ===
+        "purchase"
+      ) {
+
+        person.purchases++;
+
+
+        if (
+          trade.real_return_pct
+          !== null
+        ) {
+
+          const roi =
+            Number(
+              trade.real_return_pct
+            );
+
+
+          person.roiCount++;
+
+          person.roiTotal +=
+            roi;
+
+
+          if (roi > 0) {
+            person.winners++;
+          }
+
+        }
+
+      }
+
+    }
+  );
+
+
+  return Array
+    .from(
+      map.values()
+    )
+    .filter(
+      person =>
+        person.purchases > 0
+    )
+    .map(
+      person => {
+
+        const avgROI =
+          person.roiCount
+            ? person.roiTotal
+              /
+              person.roiCount
+            : 0;
+
+
+        const winRate =
+          person.roiCount
+            ? (
+                person.winners
+                /
+                person.roiCount
+              )
+              *
+              100
+            : 0;
+
+
+        const avgLag =
+          person.tradeCount
+            ? person.lagTotal
+              /
+              person.tradeCount
+            : 0;
+
+
+        const sample =
+          Math.min(
+            person.purchases / 10,
+            1
+          );
+
+
+        const echoScore =
+          Math.max(
+            0,
+            Math.min(
+              100,
+              50
+              +
+              avgROI * 2
+              +
+              (
+                winRate - 50
+              )
+              * .25
+              +
+              sample * 10
+            )
+          );
+
+
+        return {
+          ...person,
+          avgROI,
+          winRate,
+          avgLag,
+          echoScore
+        };
+
+      }
+    )
+    .sort(
+      (a,b) =>
+        b.echoScore
+        -
+        a.echoScore
+    );
+
+}
+
+
+function renderLeaderboard() {
+
+  const stats =
+    buildPoliticianStats();
+
+
+  const container =
+    document.getElementById(
+      "leaderRows"
+    );
+
+
+  container.innerHTML = "";
+
+
+  stats
+    .slice(0,25)
+    .forEach(
+      (person,index) => {
+
+        const row =
+          document.createElement(
+            "div"
+          );
+
+
+        row.className =
+          "leader-row";
+
+
+        row.innerHTML = `
+
+          <div class="rank">
+            #${index + 1}
+          </div>
+
+          <div class="leader-person">
+
+            <strong>
+              ${safe(
+                person.politician
+              )}
+            </strong>
+
+            <small>
+              ${
+                person.purchases
+              }
+              purchases tracked
+            </small>
+
+          </div>
+
+          <div class="leader-stat">
+            <label>FOLLOWER ROI</label>
+
+            <strong class="${
+              classForNumber(
+                person.avgROI
+              )
+            }">
+              ${pct(
+                person.avgROI
+              )}
+            </strong>
+          </div>
+
+          <div class="leader-stat">
+            <label>WIN RATE</label>
+
+            <strong>
+              ${
+                person.winRate
+                .toFixed(1)
+              }%
+            </strong>
+          </div>
+
+          <div class="leader-stat">
+            <label>AVG LAG</label>
+
+            <strong>
+              ${
+                person.avgLag
+                .toFixed(1)
+              }d
+            </strong>
+          </div>
+
+          <div class="echo-score">
+            ${
+              person.echoScore
+              .toFixed(0)
+            }
+          </div>
+
+        `;
+
+
+        container.appendChild(
+          row
+        );
+
+      }
+    );
+
+}
+
+
+/* ============================================================
+   SIGNALS
+   ============================================================ */
+
+function renderSignals() {
+
+  const fresh =
+    trades.filter(
+      trade =>
+        String(
+          trade.signal_status ||
+          ""
+        )
+        .toLowerCase()
+        .includes("fresh")
+    );
+
+
+  const priced =
+    trades.filter(
+      trade =>
+        String(
+          trade.signal_status ||
+          ""
+        )
+        .toLowerCase()
+        .includes("priced")
+    );
+
+
+  renderSignalList(
+    fresh,
+    "freshSignalRows",
+    false
+  );
+
+
+  renderSignalList(
+    priced,
+    "pricedSignalRows",
+    true
+  );
+
+}
+
+
+function renderSignalList(
+  rows,
+  containerId,
+  showMissed
+) {
+
+  const container =
+    document.getElementById(
+      containerId
+    );
+
+
+  container.innerHTML = "";
+
+
+  rows
+    .slice(0,30)
+    .forEach(
+      trade => {
+
+        const button =
+          document.createElement(
+            "button"
+          );
+
+
+        button.className =
+          "signal-row";
+
+
+        button.innerHTML = `
+
+          <div>
+
+            <strong>
+              ${safe(
+                trade.ticker
+              )}
+            </strong>
+
+            <span>
+              ${safe(
+                cleanPolitician(
+                  trade.politician
+                )
+              )}
+            </span>
+
+          </div>
+
+
+          <div>
+
+            <b class="${
+              showMissed
+                ? "warning"
+                : classForNumber(
+                    trade.real_return_pct
+                  )
+            }">
+
+              ${
+                showMissed
+                  ? pct(
+                      trade.missed_move_pct
+                    )
+                  : pct(
+                      trade.real_return_pct
+                    )
+              }
+
+            </b>
+
+            <small>
+
+              ${
+                showMissed
+                  ? "before filing"
+                  : (
+                      trade.lag_days
+                      +
+                      "d lag"
+                    )
+              }
+
+            </small>
+
+          </div>
+
+        `;
+
+
+        button.addEventListener(
+          "click",
+          () => {
+
+            switchView(
+              "terminal"
+            );
+
+            selectTrade(
+              trade
+            );
+
+            window.scrollTo({
+              top: 0,
+              behavior: "smooth"
+            });
+
+          }
+        );
+
+
+        container.appendChild(
+          button
+        );
+
+      }
+    );
+
+}
+
+
+/* ============================================================
+   NAVIGATION
+   ============================================================ */
+
+function switchView(view) {
+
+  const terminal =
+    document.getElementById(
+      "terminalView"
+    );
+
+
+  const leaderboard =
+    document.getElementById(
+      "leaderboardView"
+    );
+
+
+  const signals =
+    document.getElementById(
+      "signalsView"
+    );
+
+
+  terminal.classList.remove(
+    "active"
+  );
+
+  leaderboard.classList.remove(
+    "active"
+  );
+
+  signals.classList.remove(
+    "active"
+  );
+
+
+  document
+    .querySelectorAll(
+      ".nav button"
+    )
+    .forEach(
+      button =>
+        button
+        .classList
+        .remove("active")
+    );
+
+
+  if (view === "terminal") {
+
+    terminal.classList.add(
+      "active"
+    );
+
+    document.getElementById(
+      "navTerminal"
+    )
+    .classList.add(
+      "active"
+    );
+
+    document.getElementById(
+      "pageTitle"
+    )
+    .textContent =
+      "Intelligence Terminal";
+
+  }
+
+
+  if (
+    view === "leaderboard"
+  ) {
+
+    leaderboard
+      .classList
+      .add("active");
+
+
+    document.getElementById(
+      "navLeaderboard"
+    )
+    .classList
+    .add("active");
+
+
+    document.getElementById(
+      "pageTitle"
+    )
+    .textContent =
+      "Politician Leaderboard";
+
+  }
+
+
+  if (view === "signals") {
+
+    signals
+      .classList
+      .add("active");
+
+
+    document.getElementById(
+      "navSignals"
+    )
+    .classList
+    .add("active");
+
+
+    document.getElementById(
+      "pageTitle"
+    )
+    .textContent =
+      "Signal Scanner";
+
+  }
+
+}
+
+
+/* ============================================================
+   EVENTS
+   ============================================================ */
+
+document.getElementById(
+  "searchInput"
+)
+.addEventListener(
+  "input",
+  renderTrades
+);
+
+
+document.getElementById(
+  "typeFilter"
+)
+.addEventListener(
+  "change",
+  renderTrades
+);
+
+
+document.getElementById(
+  "navTerminal"
+)
+.addEventListener(
+  "click",
+  () =>
+    switchView("terminal")
+);
+
+
+document.getElementById(
+  "navLeaderboard"
+)
+.addEventListener(
+  "click",
+  () =>
+    switchView(
+      "leaderboard"
+    )
+);
+
+
+document.getElementById(
+  "navSignals"
+)
+.addEventListener(
+  "click",
+  () =>
+    switchView("signals")
+);
+
+
+/* ============================================================
+   START
+   ============================================================ */
+
+loadTrades();
+
+</script>
+
+</body>
+</html>
