@@ -3,9 +3,8 @@ import os
 import re
 import time
 import zipfile
-import xml.etree.ElementTree as ET
-
 from datetime import datetime, timedelta, timezone
+from xml.etree import ElementTree as ET
 
 import pdfplumber
 import requests
@@ -17,17 +16,17 @@ from supabase import create_client
 
 
 # ============================================================
-# CONFIG
+# CAPITAL-ECHO CONFIGURATION
 # ============================================================
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
 if not SUPABASE_URL:
-    raise RuntimeError("SUPABASE_URL is missing")
+    raise RuntimeError("Missing SUPABASE_URL environment variable.")
 
 if not SUPABASE_SERVICE_KEY:
-    raise RuntimeError("SUPABASE_SERVICE_KEY is missing")
+    raise RuntimeError("Missing SUPABASE_SERVICE_KEY environment variable.")
 
 
 supabase = create_client(
@@ -36,26 +35,38 @@ supabase = create_client(
 )
 
 
-HOUSE_BASE = "https://disclosures-clerk.house.gov"
+HOUSE_BASE = (
+    "https://disclosures-clerk.house.gov"
+)
 
 CURRENT_YEAR = datetime.now().year
 
-# Number of newest PTR filings inspected each run.
+
+# Number of newest congressional PTR filings processed
 MAX_PTRS_PER_RUN = 40
 
-# Delay between House PDF requests.
+
+# Pause between House PDF downloads
 REQUEST_DELAY = 0.6
 
 
+# Market data
+MARKET_HISTORY_DAYS = 35
+
+MAX_MARKET_TICKERS_PER_RUN = 150
+
+MARKET_REQUEST_DELAY = 0.30
+
+
 # ============================================================
-# HTTP SESSION
+# REQUEST SESSION
 # ============================================================
 
 session = requests.Session()
 
 retry_strategy = Retry(
     total=4,
-    backoff_factor=1,
+    backoff_factor=0.8,
     status_forcelist=[
         429,
         500,
@@ -75,32 +86,49 @@ session.mount(
     adapter
 )
 
-session.headers.update({
-    "User-Agent":
-        "Capital-Echo/1.0 congressional-disclosure-research"
-})
+session.headers.update(
+    {
+        "User-Agent":
+            "Mozilla/5.0 Capital-Echo/1.0"
+    }
+)
 
 
 # ============================================================
-# HELPERS
+# CACHES
+# ============================================================
+
+historical_price_cache = {}
+
+current_price_cache = {}
+
+
+# ============================================================
+# GENERAL HELPERS
 # ============================================================
 
 def clean_text(value):
     if value is None:
-        return ""
+        return None
 
-    return re.sub(
+    value = str(value)
+
+    value = value.replace("\x00", " ")
+
+    value = re.sub(
         r"\s+",
         " ",
-        str(value)
-    ).strip()
+        value
+    )
+
+    return value.strip()
 
 
 def parse_date(value):
     if not value:
         return None
 
-    value = value.strip()
+    value = clean_text(value)
 
     formats = [
         "%m/%d/%Y",
@@ -108,12 +136,15 @@ def parse_date(value):
         "%Y-%m-%d"
     ]
 
-    for fmt in formats:
+    for date_format in formats:
+
         try:
+
             return datetime.strptime(
                 value,
-                fmt
-            )
+                date_format
+            ).date()
+
         except ValueError:
             pass
 
@@ -121,93 +152,163 @@ def parse_date(value):
 
 
 def iso_date(value):
-    dt = parse_date(value)
-
-    if not dt:
-        return None
-
-    return dt.strftime(
-        "%Y-%m-%d"
-    )
-
-
-def round_number(value):
     if value is None:
         return None
 
-    return round(
-        float(value),
-        4
+    if hasattr(
+        value,
+        "isoformat"
+    ):
+        return value.isoformat()
+
+    return str(value)
+
+
+def round_number(
+    value,
+    digits=4
+):
+
+    if value is None:
+        return None
+
+    try:
+        return round(
+            float(value),
+            digits
+        )
+
+    except Exception:
+        return None
+
+
+def safe_float(value):
+    try:
+
+        value = float(value)
+
+        if value != value:
+            return None
+
+        return value
+
+    except Exception:
+        return None
+
+
+# ============================================================
+# MARKET PRICE FUNCTIONS
+# ============================================================
+
+def normalize_yahoo_ticker(ticker):
+
+    if not ticker:
+        return None
+
+    ticker = (
+        str(ticker)
+        .strip()
+        .upper()
     )
 
+    # Yahoo commonly represents share classes with "-"
+    #
+    # BRK.B -> BRK-B
 
-# ============================================================
-# MARKET DATA CACHE
-# ============================================================
+    ticker = ticker.replace(
+        ".",
+        "-"
+    )
 
-historical_price_cache = {}
-current_price_cache = {}
+    return ticker
 
 
-# ============================================================
-# MARKET DATA
-# ============================================================
+def valid_market_ticker(ticker):
+
+    if not ticker:
+        return False
+
+    ticker = (
+        str(ticker)
+        .strip()
+        .upper()
+    )
+
+    if len(ticker) > 12:
+        return False
+
+    allowed = set(
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "0123456789.-"
+    )
+
+    return all(
+        char in allowed
+        for char in ticker
+    )
+
 
 def get_market_price_on_date(
     ticker,
-    date_value
+    target_date
 ):
-    """
-    Returns the first available market close on or after
-    the requested calendar date.
 
-    This automatically handles weekends and market holidays.
-    """
+    if not ticker:
+        return None
 
-    if isinstance(
-        date_value,
-        str
-    ):
-        target_date = datetime.strptime(
-            date_value,
-            "%Y-%m-%d"
-        )
-    else:
-        target_date = date_value
+    if not target_date:
+        return None
+
 
     cache_key = (
-        ticker.upper(),
-        target_date.strftime("%Y-%m-%d")
+        ticker,
+        str(target_date)
     )
 
+
     if cache_key in historical_price_cache:
+
         return historical_price_cache[
             cache_key
         ]
 
-    try:
 
-        stock = yf.Ticker(
+    yahoo_ticker = (
+        normalize_yahoo_ticker(
             ticker
         )
+    )
+
+
+    try:
+
+        start_date = target_date
 
         end_date = (
             target_date
-            + timedelta(days=8)
+            +
+            timedelta(days=8)
         )
+
+
+        stock = yf.Ticker(
+            yahoo_ticker
+        )
+
 
         history = stock.history(
-            start=target_date.strftime(
-                "%Y-%m-%d"
-            ),
-            end=end_date.strftime(
-                "%Y-%m-%d"
-            ),
+            start=start_date.isoformat(),
+            end=end_date.isoformat(),
             interval="1d",
-            auto_adjust=False
+            auto_adjust=False,
+            actions=False
         )
 
-        if history.empty:
+
+        if (
+            history is None
+            or history.empty
+        ):
 
             historical_price_cache[
                 cache_key
@@ -215,21 +316,46 @@ def get_market_price_on_date(
 
             return None
 
-        price = round_number(
-            history.iloc[0]["Close"]
+
+        close_series = (
+            history["Close"]
+            .dropna()
         )
+
+
+        if close_series.empty:
+
+            historical_price_cache[
+                cache_key
+            ] = None
+
+            return None
+
+
+        value = float(
+            close_series.iloc[0]
+        )
+
+
+        value = round_number(
+            value,
+            4
+        )
+
 
         historical_price_cache[
             cache_key
-        ] = price
+        ] = value
 
-        return price
 
-    except Exception as error:
+        return value
+
+
+    except Exception as exc:
 
         print(
-            f"[MARKET] Historical price "
-            f"failed for {ticker}: {error}"
+            f"[PRICE] {ticker} "
+            f"{target_date}: {exc}"
         )
 
         historical_price_cache[
@@ -239,69 +365,125 @@ def get_market_price_on_date(
         return None
 
 
-def get_current_price(ticker):
-    """
-    Attempts intraday pricing first.
+def get_current_price(
+    ticker
+):
 
-    Falls back to the latest daily close.
-    """
+    if not ticker:
+        return None
 
-    ticker = ticker.upper()
+
+    ticker = (
+        str(ticker)
+        .strip()
+        .upper()
+    )
+
 
     if ticker in current_price_cache:
+
         return current_price_cache[
             ticker
         ]
 
+
+    yahoo_ticker = (
+        normalize_yahoo_ticker(
+            ticker
+        )
+    )
+
+
     try:
 
         stock = yf.Ticker(
-            ticker
+            yahoo_ticker
         )
 
-        intraday = stock.history(
+
+        # Try recent intraday price first
+
+        history = stock.history(
             period="1d",
             interval="1m",
             auto_adjust=False,
-            prepost=False
+            actions=False
         )
 
-        if not intraday.empty:
 
-            price = round_number(
-                intraday.iloc[-1]["Close"]
+        if (
+            history is not None
+            and not history.empty
+        ):
+
+            closes = (
+                history["Close"]
+                .dropna()
             )
 
-            current_price_cache[
-                ticker
-            ] = price
+            if not closes.empty:
 
-            return price
+                value = float(
+                    closes.iloc[-1]
+                )
 
-        daily = stock.history(
+                value = round_number(
+                    value,
+                    4
+                )
+
+                current_price_cache[
+                    ticker
+                ] = value
+
+                return value
+
+
+        # Fallback to daily data
+
+        history = stock.history(
             period="5d",
             interval="1d",
-            auto_adjust=False
+            auto_adjust=False,
+            actions=False
         )
 
-        if not daily.empty:
 
-            price = round_number(
-                daily.iloc[-1]["Close"]
+        if (
+            history is not None
+            and not history.empty
+        ):
+
+            closes = (
+                history["Close"]
+                .dropna()
             )
 
-            current_price_cache[
-                ticker
-            ] = price
+            if not closes.empty:
 
-            return price
+                value = float(
+                    closes.iloc[-1]
+                )
 
-    except Exception as error:
+                value = round_number(
+                    value,
+                    4
+                )
+
+                current_price_cache[
+                    ticker
+                ] = value
+
+                return value
+
+
+    except Exception as exc:
 
         print(
-            f"[MARKET] Current price "
-            f"failed for {ticker}: {error}"
+            f"[PRICE] Current "
+            f"{ticker}: {exc}"
         )
+
 
     current_price_cache[
         ticker
@@ -311,74 +493,116 @@ def get_current_price(ticker):
 
 
 # ============================================================
-# LAG ENGINE
+# CAPITAL-ECHO LAG ENGINE
 # ============================================================
 
-def calculate_signal_status(
+def calculate_lag_days(
+    transaction_date,
+    disclosure_date
+):
+
+    if (
+        transaction_date is None
+        or disclosure_date is None
+    ):
+        return None
+
+
+    return (
+        disclosure_date
+        -
+        transaction_date
+    ).days
+
+
+def calculate_percentage(
+    start_value,
+    end_value
+):
+
+    if (
+        start_value is None
+        or end_value is None
+    ):
+        return None
+
+
+    if start_value == 0:
+        return None
+
+
+    return (
+        (
+            end_value
+            -
+            start_value
+        )
+        /
+        start_value
+    ) * 100
+
+
+def determine_signal_status(
     lag_days,
     missed_move_pct
 ):
 
-    if (
-        missed_move_pct is not None
-        and missed_move_pct >= 20
-    ):
-        return "Priced In"
+    if missed_move_pct is not None:
 
-    if (
-        missed_move_pct is not None
-        and missed_move_pct <= -20
-    ):
-        return "Price Fell During Lag"
+        if missed_move_pct >= 20:
+
+            return "Priced In"
+
+        if missed_move_pct <= -20:
+
+            return "Price Fell During Lag"
+
+
+    if lag_days is None:
+
+        return "Unknown"
+
 
     if lag_days < 14:
+
         return "Fresh Signal"
 
+
     if lag_days < 30:
+
         return "Moderate Lag"
+
 
     return "Late Signal"
 
 
-def calculate_lag_engine(
+def run_lag_engine(
     ticker,
     transaction_date,
     disclosure_date
 ):
 
-    transaction_dt = datetime.strptime(
+    lag_days = calculate_lag_days(
         transaction_date,
-        "%Y-%m-%d"
+        disclosure_date
     )
 
-    disclosure_dt = datetime.strptime(
-        disclosure_date,
-        "%Y-%m-%d"
-    )
-
-    lag_days = (
-        disclosure_dt
-        - transaction_dt
-    ).days
-
-    if lag_days < 0:
-        raise ValueError(
-            "Disclosure date is before transaction date"
-        )
 
     transaction_price = (
         get_market_price_on_date(
             ticker,
-            transaction_dt
+            transaction_date
         )
     )
+
 
     disclosure_price = (
         get_market_price_on_date(
             ticker,
-            disclosure_dt
+            disclosure_date
         )
     )
+
 
     current_price = (
         get_current_price(
@@ -386,36 +610,30 @@ def calculate_lag_engine(
         )
     )
 
-    real_return_pct = None
-    missed_move_pct = None
 
-    if (
-        disclosure_price is not None
-        and disclosure_price != 0
-        and current_price is not None
-    ):
+    missed_move_pct = (
+        calculate_percentage(
+            transaction_price,
+            disclosure_price
+        )
+    )
 
-        real_return_pct = (
-            (
-                current_price
-                - disclosure_price
-            )
-            / disclosure_price
-        ) * 100
 
-    if (
-        transaction_price is not None
-        and transaction_price != 0
-        and disclosure_price is not None
-    ):
+    follower_roi = (
+        calculate_percentage(
+            disclosure_price,
+            current_price
+        )
+    )
 
-        missed_move_pct = (
-            (
-                disclosure_price
-                - transaction_price
-            )
-            / transaction_price
-        ) * 100
+
+    signal_status = (
+        determine_signal_status(
+            lag_days,
+            missed_move_pct
+        )
+    )
+
 
     return {
 
@@ -423,282 +641,337 @@ def calculate_lag_engine(
             lag_days,
 
         "transaction_price":
-            transaction_price,
-
-        "disclosure_price":
-            disclosure_price,
-
-        "current_price":
-            current_price,
-
-        "real_return_pct":
-            round(
-                real_return_pct,
-                2
-            )
-            if real_return_pct is not None
-            else None,
-
-        "missed_move_pct":
-            round(
-                missed_move_pct,
-                2
-            )
-            if missed_move_pct is not None
-            else None,
-
-        "signal_status":
-            calculate_signal_status(
-                lag_days,
-                missed_move_pct
+            round_number(
+                transaction_price,
+                4
             ),
 
-        "last_updated":
-            datetime.now(
-                timezone.utc
-            ).isoformat()
+        "disclosure_price":
+            round_number(
+                disclosure_price,
+                4
+            ),
+
+        "current_price":
+            round_number(
+                current_price,
+                4
+            ),
+
+        "real_return_pct":
+            round_number(
+                follower_roi,
+                2
+            ),
+
+        "missed_move_pct":
+            round_number(
+                missed_move_pct,
+                2
+            ),
+
+        "signal_status":
+            signal_status
     }
 
 
 # ============================================================
-# HOUSE YEARLY INDEX
+# HOUSE FILING INDEX
 # ============================================================
 
-def strip_namespace(tag):
-
-    if "}" in tag:
-        return tag.split(
-            "}",
-            1
-        )[1]
-
-    return tag
-
-
-def direct_child_map(node):
-
-    result = {}
-
-    for child in list(node):
-
-        tag = strip_namespace(
-            child.tag
-        )
-
-        result[
-            tag.lower()
-        ] = clean_text(
-            child.text
-        )
-
-    return result
-
-
-def download_house_index(year):
+def download_house_filing_index(
+    year
+):
 
     url = (
-        f"{HOUSE_BASE}/public_disc/"
-        f"financial-pdfs/{year}FD.zip"
+        f"{HOUSE_BASE}"
+        f"/public_disc/"
+        f"financial-pdfs/"
+        f"{year}FD.zip"
     )
 
+
     print(
-        f"[HOUSE] Downloading {year} filing index..."
+        f"[HOUSE] Downloading "
+        f"{year} filing index..."
     )
+
 
     response = session.get(
         url,
-        timeout=45
+        timeout=60
     )
 
     response.raise_for_status()
 
-    return response.content
-
-
-def parse_house_index(
-    zip_bytes,
-    year
-):
 
     with zipfile.ZipFile(
-        io.BytesIO(zip_bytes)
+        io.BytesIO(
+            response.content
+        )
     ) as archive:
-
-        files = archive.namelist()
 
         xml_files = [
             name
-            for name in files
+            for name in archive.namelist()
             if name.lower().endswith(
                 ".xml"
             )
         ]
 
+
         if not xml_files:
+
             raise RuntimeError(
-                f"No XML file found inside "
-                f"{year}FD.zip"
+                f"No XML file found "
+                f"in {year} House archive."
             )
 
-        xml_name = xml_files[0]
 
-        xml_data = archive.read(
-            xml_name
+        xml_bytes = archive.read(
+            xml_files[0]
         )
 
+
+    return xml_bytes
+
+
+def parse_house_index(
+    xml_bytes,
+    year
+):
+
     root = ET.fromstring(
-        xml_data
+        xml_bytes
     )
+
 
     filings = []
 
-    for node in root.iter():
 
-        fields = direct_child_map(
-            node
-        )
+    for member in root:
 
-        if (
-            "docid" not in fields
-            or "filingtype" not in fields
-        ):
-            continue
+        values = {}
+
+
+        for child in member:
+
+            key = (
+                child.tag
+                .split("}")[-1]
+            )
+
+            values[key] = (
+                clean_text(
+                    child.text
+                )
+            )
+
 
         filing_type = (
-            fields.get(
-                "filingtype",
-                ""
+            values.get(
+                "FilingType"
             )
-            .strip()
-            .upper()
-        )
+            or ""
+        ).upper()
+
+
+        # P = Periodic Transaction Report
 
         if filing_type != "P":
             continue
 
-        doc_id = fields.get(
-            "docid"
+
+        doc_id = (
+            values.get("DocID")
+            or values.get("DocumentID")
         )
 
+
+        if not doc_id:
+            continue
+
+
+        filing_date_text = (
+            values.get(
+                "FilingDate"
+            )
+        )
+
+
         filing_date = (
-            fields.get(
-                "filingdate"
+            parse_date(
+                filing_date_text
+            )
+        )
+
+
+        first_name = (
+            values.get(
+                "First"
             )
             or ""
         )
 
-        filing_dt = parse_date(
-            filing_date
+
+        last_name = (
+            values.get(
+                "Last"
+            )
+            or ""
         )
 
-        first = fields.get(
-            "first",
-            ""
+
+        prefix = (
+            values.get(
+                "Prefix"
+            )
+            or ""
         )
 
-        last = fields.get(
-            "last",
-            ""
+
+        suffix = (
+            values.get(
+                "Suffix"
+            )
+            or ""
         )
 
-        suffix = fields.get(
-            "suffix",
-            ""
-        )
 
-        prefix = fields.get(
-            "prefix",
-            ""
-        )
-
-        name = clean_text(
+        politician = clean_text(
             " ".join(
                 part
                 for part in [
                     prefix,
-                    first,
-                    last,
+                    first_name,
+                    last_name,
                     suffix
                 ]
                 if part
             )
         )
 
-        filings.append({
 
-            "year":
-                year,
+        filing_url = (
+            f"{HOUSE_BASE}"
+            f"/public_disc/"
+            f"ptr-pdfs/"
+            f"{year}/"
+            f"{doc_id}.pdf"
+        )
 
-            "doc_id":
-                doc_id,
 
-            "politician":
-                name,
+        filings.append(
+            {
 
-            "filing_date":
-                filing_date,
+                "doc_id":
+                    doc_id,
 
-            "filing_dt":
-                filing_dt,
+                "politician":
+                    politician,
 
-            "state_district":
-                (
-                    fields.get(
-                        "statedst"
-                    )
-                    or fields.get(
-                        "statedistrict"
-                    )
-                    or ""
-                )
-        })
+                "filing_date":
+                    filing_date,
+
+                "filing_url":
+                    filing_url,
+
+                "year":
+                    year
+            }
+        )
+
 
     filings.sort(
-        key=lambda row:
-            row["filing_dt"]
-            or datetime.min,
+        key=lambda row: (
+            row["filing_date"]
+            or datetime.min.date()
+        ),
         reverse=True
     )
 
-    return filings
-
-
-def get_ptr_filings(year):
-
-    zip_bytes = download_house_index(
-        year
-    )
-
-    filings = parse_house_index(
-        zip_bytes,
-        year
-    )
 
     print(
         f"[HOUSE] Found "
-        f"{len(filings)} PTR filings "
-        f"in {year}."
+        f"{len(filings)} "
+        f"PTR filings in {year}."
     )
+
+
+    return filings
+
+
+def get_recent_ptr_filings():
+
+    all_filings = []
+
+
+    for year in [
+        CURRENT_YEAR,
+        CURRENT_YEAR - 1
+    ]:
+
+        try:
+
+            xml_bytes = (
+                download_house_filing_index(
+                    year
+                )
+            )
+
+
+            filings = (
+                parse_house_index(
+                    xml_bytes,
+                    year
+                )
+            )
+
+
+            all_filings.extend(
+                filings
+            )
+
+
+        except Exception as exc:
+
+            print(
+                f"[HOUSE] Could not "
+                f"load {year}: {exc}"
+            )
+
+
+    all_filings.sort(
+        key=lambda row: (
+            row["filing_date"]
+            or datetime.min.date()
+        ),
+        reverse=True
+    )
+
+
+    filings = all_filings[
+        :MAX_PTRS_PER_RUN
+    ]
+
+
+    print(
+        f"[HOUSE] Processing "
+        f"{len(filings)} "
+        f"newest PTRs."
+    )
+
 
     return filings
 
 
 # ============================================================
-# PTR PDF
+# PDF EXTRACTION
 # ============================================================
 
-def build_ptr_url(
-    year,
-    doc_id
+def download_pdf(
+    url
 ):
-
-    return (
-        f"{HOUSE_BASE}/public_disc/"
-        f"ptr-pdfs/{year}/{doc_id}.pdf"
-    )
-
-
-def download_ptr_pdf(url):
 
     response = session.get(
         url,
@@ -714,33 +987,53 @@ def extract_pdf_text(
     pdf_bytes
 ):
 
-    pages = []
+    text_parts = []
 
-    with pdfplumber.open(
-        io.BytesIO(pdf_bytes)
-    ) as pdf:
 
-        for page in pdf.pages:
+    try:
 
-            text = (
-                page.extract_text(
-                    x_tolerance=2,
-                    y_tolerance=3
+        with pdfplumber.open(
+            io.BytesIO(
+                pdf_bytes
+            )
+        ) as pdf:
+
+            for page in pdf.pages:
+
+                # layout=True helps preserve
+                # House disclosure columns better.
+
+                text = page.extract_text(
+                    layout=True
                 )
-                or ""
-            )
 
-            pages.append(
-                text
-            )
+                if text:
+                    text_parts.append(
+                        text
+                    )
+
+
+    except Exception as exc:
+
+        print(
+            f"[PTR] PDF parse "
+            f"error: {exc}"
+        )
+
+        return None
+
+
+    if not text_parts:
+        return None
+
 
     return "\n".join(
-        pages
+        text_parts
     )
 
 
 # ============================================================
-# PTR TEXT PARSER
+# HOUSE TRANSACTION PARSER
 # ============================================================
 
 TICKER_MARKER = re.compile(
@@ -764,137 +1057,124 @@ TRANSACTION_INFO = re.compile(
     r")"
     r"\s+"
     r"(?P<date>"
-    r"\d{1,2}/\d{1,2}/\d{4}"
+    r"\d{1,2}/"
+    r"\d{1,2}/"
+    r"\d{4}"
     r")"
     r"(?:\s+"
     r"(?P<notification>"
-    r"\d{1,2}/\d{1,2}/\d{4}"
-    r"))?"
+    r"\d{1,2}/"
+    r"\d{1,2}/"
+    r"\d{4}"
+    r")"
+    r")?"
     r"\s+"
     r"(?P<amount>"
-    r"\$[\d,]+"
-    r"\s*-\s*"
-    r"\$[\d,]+"
+    r"\$[\d,]+\s*-\s*\$[\d,]+"
     r"|Over\s+\$[\d,]+"
     r")",
     re.IGNORECASE
 )
 
 
-OWNER_ASSET = re.compile(
-    r"(?:^|\n)"
-    r"(?P<owner>SP|JT|DC)"
-    r"\s+"
-    r"(?P<asset>[^\n]{1,250})$",
-    re.MULTILINE
-)
+ALLOWED_ASSET_TYPES = {
+    "ST",
+    "EF"
+}
 
 
-def extract_pdf_member_name(
-    text,
-    fallback
+def transaction_type_name(
+    value
 ):
 
-    match = re.search(
-        r"Name:\s*"
-        r"([^\n]+)",
-        text,
-        re.IGNORECASE
-    )
+    if not value:
+        return "Unknown"
 
-    if match:
-
-        name = clean_text(
-            match.group(1)
-        )
-
-        name = re.sub(
-            r"\s+Status:.*$",
-            "",
-            name,
-            flags=re.IGNORECASE
-        )
-
-        return name
-
-    return fallback
-
-
-def transaction_type_name(code):
 
     value = (
-        code.upper()
+        value
         .strip()
+        .upper()
     )
 
-    if value == "P":
+
+    if value.startswith("P"):
         return "Purchase"
+
 
     if value.startswith("S"):
         return "Sale"
 
-    if value == "E":
+
+    if value.startswith("E"):
         return "Exchange"
+
 
     return value
 
 
-def find_asset_and_owner(
-    before_text
+def extract_asset_name(
+    text,
+    marker_start
 ):
 
-    window = before_text[
-        -400:
+    before = text[
+        max(
+            0,
+            marker_start - 300
+        ):
+        marker_start
     ]
 
-    matches = list(
-        OWNER_ASSET.finditer(
-            window
-        )
-    )
-
-    if matches:
-
-        latest = matches[-1]
-
-        owner = latest.group(
-            "owner"
-        )
-
-        asset = clean_text(
-            latest.group(
-                "asset"
-            )
-        )
-
-        return owner, asset
 
     lines = [
         clean_text(line)
-        for line
-        in window.splitlines()
+        for line in before.splitlines()
         if clean_text(line)
     ]
 
-    if lines:
 
-        asset = lines[-1]
-
-        asset = re.sub(
-            r"^(SP|JT|DC)\s+",
-            "",
-            asset
-        )
-
-        return None, asset
-
-    return None, ""
+    if not lines:
+        return None
 
 
-def parse_ptr_transactions(
-    text,
-    filing
+    candidate = lines[-1]
+
+
+    # Remove likely row-number prefixes
+
+    candidate = re.sub(
+        r"^\d+\.\s*",
+        "",
+        candidate
+    )
+
+
+    # Remove owner prefixes like SP / JT / DC
+
+    candidate = re.sub(
+        r"^(SP|JT|DC)\s+",
+        "",
+        candidate,
+        flags=re.IGNORECASE
+    )
+
+
+    return clean_text(
+        candidate
+    )
+
+
+def parse_market_transactions(
+    text
 ):
+
+    if not text:
+        return []
+
+
+    transactions = []
+
 
     markers = list(
         TICKER_MARKER.finditer(
@@ -902,29 +1182,6 @@ def parse_ptr_transactions(
         )
     )
 
-    if not markers:
-
-        return []
-
-    politician = extract_pdf_member_name(
-        text,
-        filing["politician"]
-    )
-
-    disclosure_date = iso_date(
-        filing["filing_date"]
-    )
-
-    if not disclosure_date:
-
-        print(
-            f"[PTR] Missing filing date "
-            f"for {filing['doc_id']}"
-        )
-
-        return []
-
-    trades = []
 
     for index, marker in enumerate(
         markers
@@ -937,6 +1194,7 @@ def parse_ptr_transactions(
             .upper()
         )
 
+
         asset_type = (
             marker.group(
                 "asset_type"
@@ -944,53 +1202,79 @@ def parse_ptr_transactions(
             .upper()
         )
 
-        # Only market securities we can reasonably
-        # price through ticker-based market data.
-        allowed_asset_types = {
-            "ST",
-            "EF"
-        }
 
-        if asset_type not in allowed_asset_types:
+        if asset_type not in ALLOWED_ASSET_TYPES:
             continue
 
-        segment_end = (
-            markers[index + 1].start()
-            if index + 1 < len(markers)
-            else min(
-                len(text),
-                marker.end() + 700
-            )
+
+        segment_start = (
+            marker.end()
         )
 
-        after = text[
-            marker.end():
+
+        if index + 1 < len(markers):
+
+            segment_end = (
+                markers[
+                    index + 1
+                ].start()
+            )
+
+        else:
+
+            segment_end = min(
+                len(text),
+                segment_start + 1000
+            )
+
+
+        segment = text[
+            segment_start:
             segment_end
         ]
 
+
         transaction_match = (
             TRANSACTION_INFO.search(
-                after
+                segment
             )
         )
+
 
         if not transaction_match:
             continue
 
-        transaction_date = iso_date(
-            transaction_match.group(
-                "date"
+
+        transaction_date = (
+            parse_date(
+                transaction_match.group(
+                    "date"
+                )
             )
         )
 
-        if not transaction_date:
+
+        notification_date = (
+            parse_date(
+                transaction_match.group(
+                    "notification"
+                )
+            )
+        )
+
+
+        if transaction_date is None:
             continue
 
-        tx_type = transaction_type_name(
-            transaction_match.group(
-                "type"
+
+        transaction_type = (
+            transaction_type_name(
+                transaction_match.group(
+                    "type"
+                )
             )
         )
+
 
         amount = clean_text(
             transaction_match.group(
@@ -998,319 +1282,465 @@ def parse_ptr_transactions(
             )
         )
 
-        before = text[
-            max(
-                0,
-                marker.start() - 400
-            ):
-            marker.start()
-        ]
 
-        owner, asset_name = (
-            find_asset_and_owner(
-                before
+        asset_name = (
+            extract_asset_name(
+                text,
+                marker.start()
             )
         )
 
-        if not asset_name:
 
-            asset_name = ticker
+        transactions.append(
+            {
 
-        trade = {
+                "ticker":
+                    ticker,
 
-            "politician":
-                politician,
+                "asset_name":
+                    asset_name,
 
-            "party":
-                None,
+                "asset_type":
+                    asset_type,
 
-            "ticker":
-                ticker,
+                "transaction_type":
+                    transaction_type,
 
-            "asset_name":
-                asset_name[:500],
+                "transaction_date":
+                    transaction_date,
 
-            "transaction_type":
-                tx_type,
+                "notification_date":
+                    notification_date,
 
-            "transaction_date":
-                transaction_date,
+                "amount":
+                    amount
+            }
+        )
 
-            "disclosure_date":
-                disclosure_date,
 
-            "amount":
-                amount,
+    # Remove exact parser duplicates
 
-            "filing_url":
-                build_ptr_url(
-                    filing["year"],
-                    filing["doc_id"]
+    unique = []
+
+    seen = set()
+
+
+    for trade in transactions:
+
+        key = (
+            trade["ticker"],
+            trade["transaction_type"],
+            trade["transaction_date"],
+            trade["amount"]
+        )
+
+
+        if key in seen:
+            continue
+
+
+        seen.add(
+            key
+        )
+
+        unique.append(
+            trade
+        )
+
+
+    return unique
+
+
+# ============================================================
+# TRADE DATABASE FUNCTIONS
+# ============================================================
+
+def trade_exists(
+    politician,
+    ticker,
+    transaction_date,
+    transaction_type,
+    filing_url
+):
+
+    try:
+
+        response = (
+            supabase
+            .table("trades")
+            .select("id")
+            .eq(
+                "politician",
+                politician
+            )
+            .eq(
+                "ticker",
+                ticker
+            )
+            .eq(
+                "transaction_date",
+                iso_date(
+                    transaction_date
                 )
-        }
-
-        trades.append(
-            trade
+            )
+            .eq(
+                "transaction_type",
+                transaction_type
+            )
+            .eq(
+                "filing_url",
+                filing_url
+            )
+            .limit(1)
+            .execute()
         )
 
-    return trades
+
+        return bool(
+            response.data
+        )
 
 
-# ============================================================
-# SUPABASE
-# ============================================================
+    except Exception as exc:
 
-def find_existing_trade(
+        print(
+            f"[DB] Duplicate "
+            f"check failed: {exc}"
+        )
+
+        return False
+
+
+def save_trade(
+    filing,
     trade
 ):
 
-    query = (
-        supabase
-        .table("trades")
-        .select("id")
-        .eq(
-            "ticker",
-            trade["ticker"]
-        )
-        .eq(
-            "transaction_date",
-            trade["transaction_date"]
-        )
-        .eq(
-            "transaction_type",
-            trade["transaction_type"]
-        )
-        .eq(
-            "filing_url",
-            trade["filing_url"]
-        )
+    politician = (
+        filing["politician"]
     )
 
-    if trade.get(
-        "politician"
+
+    ticker = (
+        trade["ticker"]
+    )
+
+
+    transaction_date = (
+        trade["transaction_date"]
+    )
+
+
+    transaction_type = (
+        trade["transaction_type"]
+    )
+
+
+    filing_url = (
+        filing["filing_url"]
+    )
+
+
+    if trade_exists(
+        politician,
+        ticker,
+        transaction_date,
+        transaction_type,
+        filing_url
     ):
-
-        query = query.eq(
-            "politician",
-            trade["politician"]
-        )
-
-    result = (
-        query
-        .limit(1)
-        .execute()
-    )
-
-    if result.data:
-        return result.data[0]["id"]
-
-    return None
-
-
-def insert_trade(
-    trade
-):
-
-    existing_id = (
-        find_existing_trade(
-            trade
-        )
-    )
-
-    if existing_id:
 
         print(
             f"[DB] Already exists: "
-            f"{trade['politician']} "
-            f"{trade['ticker']} "
-            f"{trade['transaction_date']}"
+            f"{politician} "
+            f"{ticker} "
+            f"{transaction_date}"
         )
 
         return False
 
-    try:
 
-        metrics = calculate_lag_engine(
+    disclosure_date = (
+        filing["filing_date"]
+    )
 
-            trade["ticker"],
 
-            trade[
-                "transaction_date"
+    metrics = (
+        run_lag_engine(
+            ticker,
+            transaction_date,
+            disclosure_date
+        )
+    )
+
+
+    row = {
+
+        "politician":
+            politician,
+
+        # Party enrichment will come later.
+        # NULL is preferable to fake party data.
+
+        "party":
+            None,
+
+        "ticker":
+            ticker,
+
+        "asset_name":
+            trade.get(
+                "asset_name"
+            ),
+
+        "transaction_type":
+            transaction_type,
+
+        "transaction_date":
+            iso_date(
+                transaction_date
+            ),
+
+        "disclosure_date":
+            iso_date(
+                disclosure_date
+            ),
+
+        "amount":
+            trade.get(
+                "amount"
+            ),
+
+        "filing_url":
+            filing_url,
+
+        "lag_days":
+            metrics[
+                "lag_days"
             ],
 
-            trade[
-                "disclosure_date"
-            ]
+        "transaction_price":
+            metrics[
+                "transaction_price"
+            ],
+
+        "disclosure_price":
+            metrics[
+                "disclosure_price"
+            ],
+
+        "current_price":
+            metrics[
+                "current_price"
+            ],
+
+        "real_return_pct":
+            metrics[
+                "real_return_pct"
+            ],
+
+        "missed_move_pct":
+            metrics[
+                "missed_move_pct"
+            ],
+
+        "signal_status":
+            metrics[
+                "signal_status"
+            ],
+
+        "last_updated":
+            datetime.now(
+                timezone.utc
+            ).isoformat()
+    }
+
+
+    try:
+
+        (
+            supabase
+            .table("trades")
+            .insert(row)
+            .execute()
         )
 
-    except Exception as error:
 
         print(
-            f"[LAG] Failed "
-            f"{trade['ticker']}: "
-            f"{error}"
+            f"✅ SAVED {ticker}"
+        )
+
+        print(
+            f"   Politician: "
+            f"{politician}"
+        )
+
+        print(
+            f"   Type: "
+            f"{transaction_type}"
+        )
+
+        print(
+            f"   Transaction: "
+            f"{transaction_date}"
+        )
+
+        print(
+            f"   Disclosure: "
+            f"{disclosure_date}"
+        )
+
+        print(
+            f"   Lag: "
+            f"{metrics['lag_days']} days"
+        )
+
+        print(
+            f"   Trade price: "
+            f"${metrics['transaction_price']}"
+        )
+
+        print(
+            f"   Disclosure price: "
+            f"${metrics['disclosure_price']}"
+        )
+
+        print(
+            f"   Current price: "
+            f"${metrics['current_price']}"
+        )
+
+        print(
+            f"   Follower ROI: "
+            f"{metrics['real_return_pct']}%"
+        )
+
+        print(
+            f"   Missed move: "
+            f"{metrics['missed_move_pct']}%"
+        )
+
+        print(
+            f"   Signal: "
+            f"{metrics['signal_status']}"
+        )
+
+
+        return True
+
+
+    except Exception as exc:
+
+        print(
+            f"[DB] ❌ Insert "
+            f"failed for "
+            f"{politician} "
+            f"{ticker}: {exc}"
         )
 
         return False
 
-    record = {
-        **trade,
-        **metrics
-    }
-
-    supabase.table(
-        "trades"
-    ).insert(
-        record
-    ).execute()
-
-    print("")
-    print(
-        f"✅ SAVED "
-        f"{trade['ticker']}"
-    )
-
-    print(
-        f"   Politician: "
-        f"{trade['politician']}"
-    )
-
-    print(
-        f"   Type: "
-        f"{trade['transaction_type']}"
-    )
-
-    print(
-        f"   Transaction: "
-        f"{trade['transaction_date']}"
-    )
-
-    print(
-        f"   Disclosure: "
-        f"{trade['disclosure_date']}"
-    )
-
-    print(
-        f"   Lag: "
-        f"{metrics['lag_days']} days"
-    )
-
-    print(
-        f"   Trade price: "
-        f"${metrics['transaction_price']}"
-    )
-
-    print(
-        f"   Disclosure price: "
-        f"${metrics['disclosure_price']}"
-    )
-
-    print(
-        f"   Current price: "
-        f"${metrics['current_price']}"
-    )
-
-    print(
-        f"   Follower ROI: "
-        f"{metrics['real_return_pct']}%"
-    )
-
-    print(
-        f"   Missed move: "
-        f"{metrics['missed_move_pct']}%"
-    )
-
-    print(
-        f"   Signal: "
-        f"{metrics['signal_status']}"
-    )
-
-    return True
-
 
 # ============================================================
-# PROCESS PTR
+# PROCESS HOUSE PTR FILINGS
 # ============================================================
 
-def process_ptr(
-    filing
-):
+def process_house_ptrs():
 
-    url = build_ptr_url(
-        filing["year"],
-        filing["doc_id"]
+    filings = (
+        get_recent_ptr_filings()
     )
 
-    print("")
-    print(
-        "----------------------------------------"
-    )
 
-    print(
-        f"[PTR] {filing['politician']}"
-    )
+    saved_count = 0
 
-    print(
-        f"[PTR] Filing date: "
-        f"{filing['filing_date']}"
-    )
 
-    print(
-        f"[PTR] {url}"
-    )
+    for filing in filings:
 
-    try:
+        print(
+            "----------------------------------------"
+        )
 
-        pdf_bytes = (
-            download_ptr_pdf(
-                url
+        print(
+            f"[PTR] "
+            f"{filing['politician']}"
+        )
+
+        print(
+            f"[PTR] Filing date: "
+            f"{filing['filing_date']}"
+        )
+
+        print(
+            f"[PTR] "
+            f"{filing['filing_url']}"
+        )
+
+
+        try:
+
+            pdf_bytes = download_pdf(
+                filing[
+                    "filing_url"
+                ]
             )
-        )
 
-        text = extract_pdf_text(
-            pdf_bytes
-        )
 
-        if not text.strip():
+            text = extract_pdf_text(
+                pdf_bytes
+            )
+
+
+            if not text:
+
+                print(
+                    "[PTR] PDF contains "
+                    "no extractable text."
+                )
+
+                time.sleep(
+                    REQUEST_DELAY
+                )
+
+                continue
+
+
+            transactions = (
+                parse_market_transactions(
+                    text
+                )
+            )
+
 
             print(
-                "[PTR] PDF contains no "
-                "extractable text."
+                f"[PTR] Parsed "
+                f"{len(transactions)} "
+                f"market transactions."
             )
 
-            return 0
 
-        trades = (
-            parse_ptr_transactions(
-                text,
-                filing
+            for trade in transactions:
+
+                if save_trade(
+                    filing,
+                    trade
+                ):
+
+                    saved_count += 1
+
+
+        except Exception as exc:
+
+            print(
+                f"[PTR] Error: {exc}"
             )
+
+
+        time.sleep(
+            REQUEST_DELAY
         )
 
-        print(
-            f"[PTR] Parsed "
-            f"{len(trades)} "
-            f"market transactions."
-        )
 
-        saved = 0
-
-        for trade in trades:
-
-            if insert_trade(
-                trade
-            ):
-                saved += 1
-
-        return saved
-
-    except Exception as error:
-
-        print(
-            f"[PTR] Failed: {error}"
-        )
-
-        return 0
+    return saved_count
 
 
 # ============================================================
@@ -1319,24 +1749,43 @@ def process_ptr(
 
 def refresh_existing_trades():
 
-    print("")
     print(
-        "[REFRESH] Updating existing "
-        "Follower ROI..."
+        "[REFRESH] Updating "
+        "existing Follower ROI..."
     )
 
-    response = (
-        supabase
-        .table("trades")
-        .select(
-            "id,"
-            "ticker,"
-            "disclosure_price"
+
+    try:
+
+        response = (
+            supabase
+            .table("trades")
+            .select(
+                "id,"
+                "ticker,"
+                "disclosure_price,"
+                "lag_days,"
+                "missed_move_pct"
+            )
+            .execute()
         )
-        .execute()
-    )
 
-    rows = response.data or []
+
+        rows = (
+            response.data
+            or []
+        )
+
+
+    except Exception as exc:
+
+        print(
+            f"[REFRESH] Could not "
+            f"load trades: {exc}"
+        )
+
+        return 0
+
 
     if not rows:
 
@@ -1344,9 +1793,11 @@ def refresh_existing_trades():
             "[REFRESH] No existing trades."
         )
 
-        return
+        return 0
+
 
     updated = 0
+
 
     for row in rows:
 
@@ -1354,15 +1805,15 @@ def refresh_existing_trades():
             "ticker"
         )
 
-        disclosure_price = row.get(
-            "disclosure_price"
+
+        disclosure_price = (
+            safe_float(
+                row.get(
+                    "disclosure_price"
+                )
+            )
         )
 
-        if (
-            not ticker
-            or disclosure_price is None
-        ):
-            continue
 
         current_price = (
             get_current_price(
@@ -1370,51 +1821,77 @@ def refresh_existing_trades():
             )
         )
 
-        if current_price is None:
-            continue
 
-        disclosure_price = float(
-            disclosure_price
-        )
-
-        if disclosure_price == 0:
-            continue
-
-        roi = (
-            (
+        follower_roi = (
+            calculate_percentage(
+                disclosure_price,
                 current_price
-                - disclosure_price
             )
-            / disclosure_price
-        ) * 100
-
-        (
-            supabase
-            .table("trades")
-            .update({
-
-                "current_price":
-                    current_price,
-
-                "real_return_pct":
-                    round(
-                        roi,
-                        2
-                    ),
-
-                "last_updated":
-                    datetime.now(
-                        timezone.utc
-                    ).isoformat()
-            })
-            .eq(
-                "id",
-                row["id"]
-            )
-            .execute()
         )
 
-        updated += 1
+
+        signal_status = (
+            determine_signal_status(
+                row.get(
+                    "lag_days"
+                ),
+                safe_float(
+                    row.get(
+                        "missed_move_pct"
+                    )
+                )
+            )
+        )
+
+
+        payload = {
+
+            "current_price":
+                round_number(
+                    current_price,
+                    4
+                ),
+
+            "real_return_pct":
+                round_number(
+                    follower_roi,
+                    2
+                ),
+
+            "signal_status":
+                signal_status,
+
+            "last_updated":
+                datetime.now(
+                    timezone.utc
+                ).isoformat()
+        }
+
+
+        try:
+
+            (
+                supabase
+                .table("trades")
+                .update(payload)
+                .eq(
+                    "id",
+                    row["id"]
+                )
+                .execute()
+            )
+
+
+            updated += 1
+
+
+        except Exception as exc:
+
+            print(
+                f"[REFRESH] "
+                f"{ticker}: {exc}"
+            )
+
 
     print(
         f"[REFRESH] Updated "
@@ -1422,8 +1899,496 @@ def refresh_existing_trades():
     )
 
 
+    return updated
+
+
 # ============================================================
-# MAIN
+# REAL OHLCV MARKET DATA
+# ============================================================
+
+def get_tracked_tickers():
+
+    try:
+
+        response = (
+            supabase
+            .table("trades")
+            .select("ticker")
+            .execute()
+        )
+
+
+        rows = (
+            response.data
+            or []
+        )
+
+
+    except Exception as exc:
+
+        print(
+            f"[MARKET] Could not "
+            f"load tickers: {exc}"
+        )
+
+        return []
+
+
+    tickers = set()
+
+
+    for row in rows:
+
+        ticker = (
+            row.get(
+                "ticker"
+            )
+        )
+
+
+        if not ticker:
+            continue
+
+
+        ticker = (
+            str(ticker)
+            .strip()
+            .upper()
+        )
+
+
+        if valid_market_ticker(
+            ticker
+        ):
+            tickers.add(
+                ticker
+            )
+
+
+    tickers = sorted(
+        tickers
+    )
+
+
+    print(
+        f"[MARKET] Found "
+        f"{len(tickers)} "
+        f"unique tracked tickers."
+    )
+
+
+    return tickers[
+        :MAX_MARKET_TICKERS_PER_RUN
+    ]
+
+
+def download_market_candles(
+    ticker
+):
+
+    yahoo_ticker = (
+        normalize_yahoo_ticker(
+            ticker
+        )
+    )
+
+
+    end_date = (
+        datetime.now(
+            timezone.utc
+        ).date()
+        +
+        timedelta(days=1)
+    )
+
+
+    start_date = (
+        end_date
+        -
+        timedelta(
+            days=MARKET_HISTORY_DAYS
+        )
+    )
+
+
+    try:
+
+        stock = yf.Ticker(
+            yahoo_ticker
+        )
+
+
+        history = stock.history(
+            start=start_date.isoformat(),
+            end=end_date.isoformat(),
+            interval="1d",
+            auto_adjust=False,
+            actions=False
+        )
+
+
+    except Exception as exc:
+
+        print(
+            f"[MARKET] "
+            f"{ticker}: "
+            f"download error: {exc}"
+        )
+
+        return []
+
+
+    if (
+        history is None
+        or history.empty
+    ):
+
+        print(
+            f"[MARKET] "
+            f"{ticker}: "
+            f"no OHLC data."
+        )
+
+        return []
+
+
+    candles = []
+
+
+    for index, row in (
+        history.iterrows()
+    ):
+
+        try:
+
+            open_price = (
+                safe_float(
+                    row.get(
+                        "Open"
+                    )
+                )
+            )
+
+            high_price = (
+                safe_float(
+                    row.get(
+                        "High"
+                    )
+                )
+            )
+
+            low_price = (
+                safe_float(
+                    row.get(
+                        "Low"
+                    )
+                )
+            )
+
+            close_price = (
+                safe_float(
+                    row.get(
+                        "Close"
+                    )
+                )
+            )
+
+
+            volume_value = (
+                safe_float(
+                    row.get(
+                        "Volume"
+                    )
+                )
+            )
+
+
+            if (
+                open_price is None
+                or high_price is None
+                or low_price is None
+                or close_price is None
+            ):
+                continue
+
+
+            if (
+                open_price <= 0
+                or high_price <= 0
+                or low_price <= 0
+                or close_price <= 0
+            ):
+                continue
+
+
+            candle_date = (
+                index.date()
+                .isoformat()
+            )
+
+
+            volume = (
+                int(volume_value)
+                if volume_value is not None
+                else 0
+            )
+
+
+            candles.append(
+                {
+
+                    "ticker":
+                        ticker,
+
+                    "candle_date":
+                        candle_date,
+
+                    "open":
+                        round(
+                            open_price,
+                            4
+                        ),
+
+                    "high":
+                        round(
+                            high_price,
+                            4
+                        ),
+
+                    "low":
+                        round(
+                            low_price,
+                            4
+                        ),
+
+                    "close":
+                        round(
+                            close_price,
+                            4
+                        ),
+
+                    "volume":
+                        volume,
+
+                    "last_updated":
+                        datetime.now(
+                            timezone.utc
+                        ).isoformat()
+                }
+            )
+
+
+        except Exception as exc:
+
+            print(
+                f"[MARKET] "
+                f"{ticker}: "
+                f"bad candle row: {exc}"
+            )
+
+
+    return candles
+
+
+def save_market_candles(
+    ticker,
+    candles
+):
+
+    if not candles:
+        return 0
+
+
+    try:
+
+        (
+            supabase
+            .table(
+                "market_candles"
+            )
+            .upsert(
+                candles,
+                on_conflict=(
+                    "ticker,candle_date"
+                )
+            )
+            .execute()
+        )
+
+
+        print(
+            f"[MARKET] ✅ "
+            f"{ticker}: "
+            f"{len(candles)} "
+            f"candles stored."
+        )
+
+
+        return len(
+            candles
+        )
+
+
+    except Exception as exc:
+
+        print(
+            f"[MARKET] ❌ "
+            f"{ticker}: "
+            f"{exc}"
+        )
+
+        return 0
+
+
+def refresh_market_history():
+
+    print("")
+    print(
+        "=========================================="
+    )
+
+    print(
+        "     CAPITAL-ECHO MARKET DATA ENGINE"
+    )
+
+    print(
+        "=========================================="
+    )
+
+
+    tickers = (
+        get_tracked_tickers()
+    )
+
+
+    if not tickers:
+
+        print(
+            "[MARKET] No tickers "
+            "available."
+        )
+
+        return
+
+
+    successful = 0
+
+    total_candles = 0
+
+
+    for index, ticker in enumerate(
+        tickers,
+        start=1
+    ):
+
+        print("")
+        print(
+            f"[MARKET] "
+            f"{index}/"
+            f"{len(tickers)} "
+            f"{ticker}"
+        )
+
+
+        candles = (
+            download_market_candles(
+                ticker
+            )
+        )
+
+
+        saved = (
+            save_market_candles(
+                ticker,
+                candles
+            )
+        )
+
+
+        if saved > 0:
+
+            successful += 1
+
+            total_candles += (
+                saved
+            )
+
+
+        time.sleep(
+            MARKET_REQUEST_DELAY
+        )
+
+
+    print("")
+    print(
+        "=========================================="
+    )
+
+    print(
+        "      MARKET DATA REFRESH COMPLETE"
+    )
+
+    print(
+        "=========================================="
+    )
+
+    print(
+        f"Tickers updated: "
+        f"{successful}"
+    )
+
+    print(
+        f"Candles processed: "
+        f"{total_candles}"
+    )
+
+
+# ============================================================
+# DATABASE TEST
+# ============================================================
+
+def test_database():
+
+    print(
+        "[DB] Checking Supabase..."
+    )
+
+
+    try:
+
+        (
+            supabase
+            .table("trades")
+            .select(
+                "id",
+                count="exact"
+            )
+            .limit(1)
+            .execute()
+        )
+
+
+        print(
+            "[DB] Supabase connected."
+        )
+
+
+        return True
+
+
+    except Exception as exc:
+
+        print(
+            f"[DB] Connection failed: "
+            f"{exc}"
+        )
+
+
+        return False
+
+
+# ============================================================
+# MAIN CAPITAL-ECHO ENGINE
 # ============================================================
 
 def main():
@@ -1441,90 +2406,37 @@ def main():
         "=========================================="
     )
 
-    print("")
-    print(
-        "[DB] Checking Supabase..."
-    )
 
-    (
-        supabase
-        .table("trades")
-        .select("id")
-        .limit(1)
-        .execute()
-    )
+    if not test_database():
 
-    print(
-        "[DB] Supabase connected."
-    )
-
-    all_filings = []
-
-    # Current year is normally enough,
-    # but checking previous year protects
-    # against early-January edge cases.
-    years = [
-        CURRENT_YEAR,
-        CURRENT_YEAR - 1
-    ]
-
-    for year in years:
-
-        try:
-
-            filings = (
-                get_ptr_filings(
-                    year
-                )
-            )
-
-            all_filings.extend(
-                filings
-            )
-
-        except Exception as error:
-
-            print(
-                f"[HOUSE] Failed index "
-                f"{year}: {error}"
-            )
-
-    all_filings.sort(
-        key=lambda row:
-            row["filing_dt"]
-            or datetime.min,
-        reverse=True
-    )
-
-    newest = all_filings[
-        :MAX_PTRS_PER_RUN
-    ]
-
-    print("")
-    print(
-        f"[HOUSE] Processing "
-        f"{len(newest)} newest PTRs."
-    )
-
-    total_saved = 0
-
-    for filing in newest:
-
-        total_saved += (
-            process_ptr(
-                filing
-            )
+        raise RuntimeError(
+            "Supabase database "
+            "connection failed."
         )
 
-        time.sleep(
-            REQUEST_DELAY
-        )
 
-    # Clear current-price cache so the
-    # refresh gets the latest quote set.
-    current_price_cache.clear()
+    # --------------------------------------------------------
+    # 1. SCRAPE NEW HOUSE DISCLOSURES
+    # --------------------------------------------------------
+
+    new_trades = (
+        process_house_ptrs()
+    )
+
+
+    # --------------------------------------------------------
+    # 2. UPDATE CURRENT PRICES + FOLLOWER ROI
+    # --------------------------------------------------------
 
     refresh_existing_trades()
+
+
+    # --------------------------------------------------------
+    # 3. DOWNLOAD REAL OHLCV STOCK HISTORY
+    # --------------------------------------------------------
+
+    refresh_market_history()
+
 
     print("")
     print(
@@ -1541,9 +2453,14 @@ def main():
 
     print(
         f"New trades saved: "
-        f"{total_saved}"
+        f"{new_trades}"
     )
 
 
+# ============================================================
+# START
+# ============================================================
+
 if __name__ == "__main__":
+
     main()
